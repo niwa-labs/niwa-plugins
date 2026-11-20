@@ -13,8 +13,12 @@
       "name": "@niwa-labs/commitments",
       "version": "0.0.0",
       "dependencies": {
+        "@niwa-labs/agent": "*",
         "@niwa-labs/core": "*",
         "@niwa-labs/plugin": "*",
+        "@niwa-labs/requests": "*",
+        "@niwa-labs/script": "*",
+        "@niwa-labs/tasks": "*",
       },
     },
     "packages/delegate": {
@@ -23,6 +27,9 @@
       "dependencies": {
         "@niwa-labs/core": "*",
         "@niwa-labs/plugin": "*",
+        "@niwa-labs/requests": "*",
+        "@niwa-labs/script": "*",
+        "@niwa-labs/workflow": "*",
       },
     },
     "packages/evidence": {
@@ -45,8 +52,11 @@
       "name": "@niwa-labs/memory",
       "version": "0.0.0",
       "dependencies": {
+        "@niwa-labs/agent": "*",
         "@niwa-labs/core": "*",
         "@niwa-labs/plugin": "*",
+        "@niwa-labs/requests": "*",
+        "@niwa-labs/script": "*",
       },
     },
     "packages/plan": {
@@ -67,10 +77,25 @@
     },
   },
   "overrides": {
+    "@niwa-labs/agent": "link:../niwa/packages/agent",
     "@niwa-labs/core": "link:../niwa/packages/core",
+    "@niwa-labs/digest": "link:../niwa/packages/digest",
+    "@niwa-labs/git": "link:../niwa/packages/git",
+    "@niwa-labs/harness": "link:../niwa/packages/harness",
+    "@niwa-labs/history": "link:../niwa/packages/history",
+    "@niwa-labs/messages": "link:../niwa/packages/messages",
     "@niwa-labs/plugin": "link:../niwa/packages/plugin",
+    "@niwa-labs/requests": "link:../niwa/packages/requests",
+    "@niwa-labs/sandbox": "link:../niwa/packages/sandbox",
+    "@niwa-labs/script": "link:../niwa/packages/script",
+    "@niwa-labs/sessions": "link:../niwa/packages/sessions",
+    "@niwa-labs/tasks": "link:../niwa/packages/tasks",
+    "@niwa-labs/timer": "link:../niwa/packages/timer",
+    "@niwa-labs/workflow": "link:../niwa/packages/workflow",
   },
   "packages": {
+    "@niwa-labs/agent": ["@niwa-labs/agent@link:../niwa/packages/agent", {}],
+
     "@niwa-labs/commitments": ["@niwa-labs/commitments@workspace:packages/commitments"],
 
     "@niwa-labs/core": ["@niwa-labs/core@link:../niwa/packages/core", {}],
@@ -87,7 +112,15 @@
 
     "@niwa-labs/plugin": ["@niwa-labs/plugin@link:../niwa/packages/plugin", {}],
 
+    "@niwa-labs/requests": ["@niwa-labs/requests@link:../niwa/packages/requests", {}],
+
+    "@niwa-labs/script": ["@niwa-labs/script@link:../niwa/packages/script", {}],
+
+    "@niwa-labs/tasks": ["@niwa-labs/tasks@link:../niwa/packages/tasks", {}],
+
     "@niwa-labs/watch": ["@niwa-labs/watch@workspace:packages/watch"],
+
+    "@niwa-labs/workflow": ["@niwa-labs/workflow@link:../niwa/packages/workflow", {}],
 
     "@types/bun": ["@types/bun@1.4.5", "", { "dependencies": { "bun-types": "1.4.5" } }, "sha512-DpgwNI9z0L1S0gtb45QLCWgwCUcMLnsHYMJHQvpNj7erGiCGBvpggltAIeARrtobNMKMuy0UP7i56tKKgwFs/Q=="],
 

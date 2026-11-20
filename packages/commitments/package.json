@@ -7,7 +7,11 @@
     "./records": "./src/records.ts"
   },
   "dependencies": {
+    "@niwa-labs/agent": "*",
     "@niwa-labs/core": "*",
-    "@niwa-labs/plugin": "*"
+    "@niwa-labs/plugin": "*",
+    "@niwa-labs/requests": "*",
+    "@niwa-labs/script": "*",
+    "@niwa-labs/tasks": "*"
   }
 }

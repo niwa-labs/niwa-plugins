@@ -8,6 +8,9 @@
   },
   "dependencies": {
     "@niwa-labs/core": "*",
-    "@niwa-labs/plugin": "*"
+    "@niwa-labs/plugin": "*",
+    "@niwa-labs/requests": "*",
+    "@niwa-labs/script": "*",
+    "@niwa-labs/workflow": "*"
   }
 }
