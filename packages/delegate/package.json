@@ -1,0 +1,13 @@
+{
+  "name": "@niwa-labs/delegate",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./records": "./src/records.ts"
+  },
+  "dependencies": {
+    "@niwa-labs/core": "*",
+    "@niwa-labs/plugin": "*"
+  }
+}
