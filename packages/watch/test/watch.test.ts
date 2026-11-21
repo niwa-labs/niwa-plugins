@@ -22,7 +22,12 @@ const Started = record("session.started", z.object({ session: z.string(), id: z.
 const TurnStarted = record("session.turn-started", z.object({ session: z.string(), turn: z.number() }));
 const TurnEnded = record("session.turn-ended", z.object({ session: z.string(), turn: z.number() }));
 const Activity = record("session.activity", z.object({ session: z.string(), tool: z.string().optional() }));
-const sessionRecords = plugin("fixture", (api) => api.declare(Started, TurnStarted, TurnEnded, Activity));
+const Asked = record(
+  "request.created",
+  z.object({ id: z.string(), to: z.object({ kind: z.string() }), from: z.object({ kind: z.string(), harness: z.string(), id: z.string() }) }),
+);
+const Answered = record("request.answered", z.object({ id: z.string(), answer: z.object({}) }));
+const sessionRecords = plugin("fixture", (api) => api.declare(Started, TurnStarted, TurnEnded, Activity, Asked, Answered));
 
 interface Rig {
   readonly niwa: ReturnType<typeof createNiwa>;
@@ -37,6 +42,8 @@ async function rig(use: Plugin[], run: (rig: Rig) => Promise<void>, opts: { home
     niwa.use(sessionRecords, ...use);
     await niwa.serve();
     await run({ niwa, clock });
+    // Work the watch does on the clock must not fail quietly.
+    expect(clock.failures()).toEqual([]);
   } finally {
     await niwa.close();
     await home?.cleanup();
@@ -167,6 +174,30 @@ test("a session looping on the same activity is flagged as looping", async () =>
     const flags = await flagsOf(niwa);
     expect(flags).toHaveLength(1);
     expect(flags[0]).toMatchObject({ type: "watch.stuck", data: { subject: me, kind: "looping" } });
+  });
+});
+
+test("a condition that comes back after a recovery is flagged again, though nothing about its start changed", async () => {
+  await rig([watch({ sessionLoopRepeats: 3 })], async ({ niwa, clock }) => {
+    await beginTurn(niwa);
+    for (let n = 0; n < 3; n += 1) {
+      await clock.advance(1000);
+      await niwa.emit(Activity, { session: ME, tool: "Edit" });
+    }
+    await clock.advance(20_000);
+    expect(typesOf(await flagsOf(niwa))).toEqual(["watch.stuck"]);
+
+    // A question to a person is not a loop; the answer puts the same loop back, from the same start.
+    await niwa.emit(Asked, { id: "req-1", to: { kind: "owner" }, from: { kind: "session", harness: "claude", id: "abc" } });
+    await clock.advance(20_000);
+    expect(typesOf(await flagsOf(niwa))).toEqual(["watch.stuck", "watch.recovered"]);
+    await niwa.emit(Answered, { id: "req-1", answer: {} });
+    await clock.advance(20_000);
+
+    const flags = await flagsOf(niwa);
+    expect(typesOf(flags)).toEqual(["watch.stuck", "watch.recovered", "watch.stuck"]);
+    expect(flags[0]?.data).toMatchObject({ kind: "looping", since: flags[2]?.data && (flags[2].data as { since: number }).since });
+    expect((flags[2]?.data as { last: number }).last).toBeGreaterThan((flags[0]?.data as { last: number }).last);
   });
 });
 

@@ -56,11 +56,6 @@ function stripped(options: WatchOptions): Partial<Settings> {
   return Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)) as Partial<Settings>;
 }
 
-/** The id of a record the watch writes: one condition of one subject is one record, however often it is written. */
-function idOf(type: "stuck" | "recovered", subject: string, kind: string, since: number): string {
-  return `watch.${type}:${encodeURIComponent(subject)}:${kind}:${since}`;
-}
-
 /** The watch plugin. */
 export function watch(options: WatchOptions = {}): Plugin {
   const settings = settingsOf(options);
@@ -94,13 +89,14 @@ export function watch(options: WatchOptions = {}): Plugin {
         for (const next of transitions(model.flags(), model.readings(ctx.now(), settings))) {
           if (next.type === "stuck") {
             const data = next.data;
-            await ctx.emit(WatchStuck, data, { id: idOf("stuck", data.subject, data.kind, data.since) });
+            await ctx.emit(WatchStuck, data);
           } else {
             const data = next.data;
-            await ctx.emit(WatchRecovered, data, { id: idOf("recovered", data.subject, data.kind, data.since) });
+            await ctx.emit(WatchRecovered, data);
           }
         }
-        // What was just written is read back at the next look, like any other record.
+        // What was just written is read back, like any other record: the flags are those the journal holds,
+        // which is also what keeps a restart from writing one twice.
         sync();
       };
 
