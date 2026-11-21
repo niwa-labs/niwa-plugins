@@ -145,6 +145,16 @@ test("a tag's pipeline is a tag however it is read, though a list does not say t
   expect((await read({ sha: sha("v1-tip"), kind: "tag" })).items).toHaveLength(1);
 });
 
+test("a burst of pipelines between two polls is recorded whole, and a poll with nothing new reads one page", async () => {
+  const host = await watched();
+  for (let at = 0; at < 130; at += 1) host.server.pipeline(host.billing, { sha: sha(`burst-${String(at)}`), ref: "main", status: "success" });
+  await syncNow(host);
+  expect(await dataOf(host, PipelineObserved.name)).toHaveLength(130);
+  host.server.requests.length = 0;
+  expect(await syncNow(host)).toEqual({ written: 0 });
+  expect(host.server.seen("GET", /\/pipelines$/).map((one) => one.query["page"])).toEqual(["1"]);
+});
+
 test("a job that moves while its pipeline stays running is written at each state it was seen in", async () => {
   const host = await watched();
   const run = host.server.pipeline(host.billing, { sha: sha("main-tip"), ref: "main", status: "running" });

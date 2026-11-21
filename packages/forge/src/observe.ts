@@ -104,6 +104,11 @@ export class Seen {
   /** The last state and version of each pipeline and job. */
   readonly pipelines = new Map<number, { state: RunState; version: number }>();
   readonly jobs = new Map<number, { state: RunState; version: number }>();
+  /**
+   * The pipelines, by id and status, that the server shows and the module cannot bind to a pair of
+   * commits, so records no version of: they are known, and not read again as news. Not from the journal.
+   */
+  readonly unbound = new Set<string>();
 
   readonly #repo: Repo;
 
@@ -287,7 +292,11 @@ export async function sync(place: SyncPlace, repo: Repo, since = 0): Promise<num
 
   // Pipelines and their jobs: a state that differs from the last one written is a new version.
   const lookups = lookupsOf(gitlab, repo);
-  const raw = await gitlab.get<GitLabPipeline[]>(projectPath(repo, "/pipelines"), { per_page: 50, order_by: "updated_at", sort: "desc" });
+  // Newest update first, read page by page until a page that holds nothing new: a burst of pipelines
+  // between two polls is read whole, the page the news ends on included, and a quiet poll reads one.
+  const key = (one: GitLabPipeline) => `${String(one.id)}:${one.status}`;
+  const settled = (one: GitLabPipeline) => seen.pipelines.get(one.id)?.state === runStateOf(one.status) || seen.unbound.has(key(one));
+  const raw = await gitlab.list<GitLabPipeline>(projectPath(repo, "/pipelines"), { order_by: "updated_at", sort: "desc" }, (page) => page.every(settled));
   for (const one of [...raw].sort((a, b) => a.id - b.id)) {
     const last = seen.pipelines.get(one.id);
     const state = runStateOf(one.status);
@@ -295,7 +304,10 @@ export async function sync(place: SyncPlace, repo: Repo, since = 0): Promise<num
     // A pipeline that is still moving has jobs that move with it, whether or not its own state did.
     if (!changed && !ACTIVE.has(state)) continue;
     const pipeline = changed ? await pipelineOf(repo, one, lookups) : undefined;
-    if (changed && pipeline === undefined) continue;
+    if (changed && pipeline === undefined) {
+      seen.unbound.add(key(one));
+      continue;
+    }
     // The jobs are written before the pipeline's new version: a pass cut off in between leaves the
     // pipeline changed, and the next pass reads its jobs again.
     for (const job of await gitlab.list<GitLabJob>(projectPath(repo, `/pipelines/${String(one.id)}/jobs`))) {
