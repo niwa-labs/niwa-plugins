@@ -21,7 +21,8 @@ A refusal (`unknown-plan`, `unknown-revision`, `stale`) is a `PlanRefusal`, an e
 What an agent ticks off while it works is not here: that checklist is read through the history of
 its session.
 
-Another plugin or a script reads the records through `@niwa-labs/plan/records`.
+Another plugin or a script reads the records through `@niwa-labs/plan/records`, which also holds the query builder
+`planRevised(of, rev?)`: `await wait(planRevised(task.id), { timeout: "1h" })` waits for a revision of that plan, typed.
 
 In the cockpit (`./cockpit`) the plans are listed with the ones that wait for a decision first. A plan opens
 with its items, how many are done, and any revision, each shown with what it changed from the one before.

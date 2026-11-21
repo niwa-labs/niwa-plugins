@@ -12,7 +12,8 @@
  * `mergeSha`, `pipeline`), so a pipeline record can be attested as it is.
  */
 
-import { Address, actionRef, record } from "@niwa-labs/core";
+import { Address, actionRef, queryOf, record } from "@niwa-labs/core";
+import type { TypeQuery } from "@niwa-labs/core";
 import { z } from "zod";
 
 /** A full commit id: a SHA-1 (40 hex characters) or a SHA-256 (64) object id. */
@@ -61,6 +62,14 @@ export const Attested = record(
   z.strictObject({ subject: Subject, claim: Claim, author: Address }),
 );
 export type AttestedData = z.infer<typeof Attested.schema>;
+
+/**
+ * The attestations about one subject, as a script waits for or reads them with their data typed:
+ * `await wait(attested(subject), { timeout: "1h" })`.
+ */
+export function attested(subject: string): TypeQuery<AttestedData> {
+  return queryOf(Attested, { subject: Subject.parse(subject) });
+}
 
 /** A requirement an attestation may cover. */
 export const Requirement = z.union([

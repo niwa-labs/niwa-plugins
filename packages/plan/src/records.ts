@@ -7,7 +7,8 @@
 
 import { z } from "zod";
 
-import { actionRef, record } from "@niwa-labs/core";
+import { actionRef, queryOf, record } from "@niwa-labs/core";
+import type { TypeQuery } from "@niwa-labs/core";
 
 /**
  * Where an item stands. `open` is a decision still ahead: the plan cannot go on past it until
@@ -63,6 +64,14 @@ export const PlanRevised = record(
   }),
 );
 export type PlanRevisedData = z.infer<typeof PlanRevised.schema>;
+
+/**
+ * The revisions of the plan of one subject, as a script waits for or reads them with their data
+ * typed: `await wait(planRevised(task.id), { timeout: "1h" })`. With `rev`, only that revision.
+ */
+export function planRevised(of: string, rev?: number): TypeQuery<PlanRevisedData> {
+  return queryOf(PlanRevised, { of: PlanSubject.parse(of), ...(rev === undefined ? {} : { rev: z.number().int().positive().parse(rev) }) });
+}
 
 /** The record types the plan plugin declares. */
 export const PLAN_TYPES = [PlanRevised] as const;

@@ -11,8 +11,8 @@
  * that says it, or he confirms what an agent proposed.
  */
 
-import { Address, EntityDescription, IdText, actionRef, getRef, idSchema, listRef, record } from "@niwa-labs/core";
-import type { Id } from "@niwa-labs/core";
+import { Address, EntityDescription, IdText, actionRef, getRef, idSchema, listRef, queryOf, record } from "@niwa-labs/core";
+import type { Id, TypeQuery } from "@niwa-labs/core";
 import { AgentName, BriefingSectionInput, BriefingSectionOutput } from "@niwa-labs/agent/records";
 import { QuestionName, RequestId } from "@niwa-labs/requests/records";
 import { z } from "zod";
@@ -83,6 +83,45 @@ export const CommitmentCancelled = record(
   "commitment.cancelled",
   z.object({ id: CommitmentId, by: Address.optional(), reason: z.string().min(1).optional() }),
 );
+
+/**
+ * The records of one commitment, as a script waits for or reads them with their data typed:
+ * `await wait(commitmentKept(id), { timeout: "2h" })`. A text that is not the id of a commitment is
+ * refused here.
+ */
+export function commitmentMade(id: string): TypeQuery<z.output<typeof CommitmentMade.schema>> {
+  return queryOf(CommitmentMade, { id: CommitmentId.parse(id) });
+}
+
+/** A proposal of one commitment. */
+export function commitmentProposed(id: string): TypeQuery<z.output<typeof CommitmentProposed.schema>> {
+  return queryOf(CommitmentProposed, { id: CommitmentId.parse(id) });
+}
+
+/** The owner did not confirm one proposed commitment. */
+export function commitmentDeclined(id: string): TypeQuery<z.output<typeof CommitmentDeclined.schema>> {
+  return queryOf(CommitmentDeclined, { id: CommitmentId.parse(id) });
+}
+
+/** One commitment came due and was delivered to its agent's inbox. */
+export function commitmentDelivered(id: string): TypeQuery<z.output<typeof CommitmentDelivered.schema>> {
+  return queryOf(CommitmentDelivered, { id: CommitmentId.parse(id) });
+}
+
+/** One commitment was done. */
+export function commitmentKept(id: string): TypeQuery<z.output<typeof CommitmentKept.schema>> {
+  return queryOf(CommitmentKept, { id: CommitmentId.parse(id) });
+}
+
+/** One commitment was not done by its deadline and the grace after it. */
+export function commitmentMissed(id: string): TypeQuery<z.output<typeof CommitmentMissed.schema>> {
+  return queryOf(CommitmentMissed, { id: CommitmentId.parse(id) });
+}
+
+/** One commitment was cancelled. */
+export function commitmentCancelled(id: string): TypeQuery<z.output<typeof CommitmentCancelled.schema>> {
+  return queryOf(CommitmentCancelled, { id: CommitmentId.parse(id) });
+}
 
 /** The record types the plugin declares. */
 export const COMMITMENT_TYPES = [

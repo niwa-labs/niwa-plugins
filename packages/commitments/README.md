@@ -14,5 +14,10 @@ A plugin for commitments: what was promised, by when, delivery, and whether it w
   each agent's briefing gets a section of its open commitments. In the cockpit every commitment is
   a card with a cancel button (`./cockpit`).
 
+A script waits for or reads one commitment with the data typed, through the builders of
+`@niwa-labs/commitments/records`: `await wait(commitmentKept(id), { timeout: "2h" })`, and likewise
+`commitmentMissed`, `commitmentDelivered`, `commitmentCancelled`, `commitmentDeclined`, `commitmentMade`
+and `commitmentProposed`.
+
 The deadline is a sleep of `@niwa-labs/timer`, asked through `timer.sleep.request`; the inbox is
 `@niwa-labs/agent`'s, so a host with commitments installs both.

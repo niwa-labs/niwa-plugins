@@ -9,7 +9,8 @@
 
 import { z } from "zod";
 
-import { actionRef, record } from "@niwa-labs/core";
+import { actionRef, queryOf, record } from "@niwa-labs/core";
+import type { TypeQuery } from "@niwa-labs/core";
 
 /** What a subject is doing, as the journal shows it. */
 export const WatchState = z.enum([
@@ -121,6 +122,20 @@ export const WatchRecovered = record(
   }),
 );
 export type WatchRecoveredData = z.infer<typeof WatchRecovered.schema>;
+
+/**
+ * The stuck records of one subject, as a script waits for or reads them with their data typed:
+ * `await wait(watchStuck(subject), { timeout: "1h" })`. With `kind`, only that condition. A text that
+ * is not a subject is refused here.
+ */
+export function watchStuck(subject: string, kind?: StuckKind): TypeQuery<WatchStuckData> {
+  return queryOf(WatchStuck, { subject: Subject.parse(subject), ...(kind === undefined ? {} : { kind: StuckKind.parse(kind) }) });
+}
+
+/** The recoveries of one subject, or of one condition of it: what ends a `watch.stuck`. */
+export function watchRecovered(subject: string, kind?: StuckKind): TypeQuery<WatchRecoveredData> {
+  return queryOf(WatchRecovered, { subject: Subject.parse(subject), ...(kind === undefined ? {} : { kind: StuckKind.parse(kind) }) });
+}
 
 /** The record types the watch plugin declares. */
 export const WATCH_TYPES = [WatchStuck, WatchRecovered] as const;

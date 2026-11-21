@@ -36,6 +36,9 @@ The watch does not react. A workflow does, by subscribing to the records:
 on: [{ type: "watch.stuck", filter: { kind: "silent" } }]
 ```
 
+A script waits for or reads them with the data typed, through the builders of `@niwa-labs/watch/records`:
+`await wait(watchStuck(subject), { timeout: "1h" })` and `watchRecovered(subject, kind?)`.
+
 ## Sources
 
 The model reads by type name and imports none of the plugins that write them, so it works with whichever are installed:
