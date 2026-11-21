@@ -216,7 +216,7 @@ export const RepoUnwatched = record("forge.repo.unwatched", z.strictObject({ rep
 export const MergeWhen = z.enum(["now", "pipeline", "train"]);
 export type MergeWhen = z.infer<typeof MergeWhen>;
 
-/** How the commits of a pull request land on its base. */
+/** How the commits of a pull request land on its base: squashed, or by the project's merge method (`merge`, `rebase`). */
 export const MergeMethod = z.enum(["merge", "squash", "rebase"]);
 export type MergeMethod = z.infer<typeof MergeMethod>;
 

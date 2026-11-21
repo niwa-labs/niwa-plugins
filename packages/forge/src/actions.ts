@@ -217,7 +217,8 @@ export type MergeOutcome = z.infer<typeof MergeOutcome>;
 
 export const forgePrMerge = actionRef("forge.pr.merge", {
   description:
-    "Merge a pull request, only if its head is still `expectHead`. `when: now` merges at once; `pipeline` arms the server to merge " +
+    "Merge a pull request, only if its head is still `expectHead`. `method: squash` squashes its commits; `merge` and `rebase` " +
+    "land them by the project's own merge method. `when: now` merges at once; `pipeline` arms the server to merge " +
     "when the pipeline succeeds; `train` puts it in the merge train. Answers merged (with the commit), armed or queued (with the " +
     "server's id and the action that calls it off), or refused with the server's reason, such as a head that moved. " +
     "Irreversible and external: a grant names it.",

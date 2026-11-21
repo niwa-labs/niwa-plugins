@@ -169,8 +169,6 @@
 
     "@niwa-labs/ui-kit": ["@niwa-labs/ui-kit@link:../niwa/packages/ui-kit", {}],
 
-    "@niwa-labs/testing": ["@niwa-labs/testing@link:../niwa/packages/testing", {}],
-
     "@niwa-labs/watch": ["@niwa-labs/watch@workspace:packages/watch"],
 
     "@tanstack/query-core": ["@tanstack/query-core@5.108.2", "", {}, "sha512-0l+0xDKqn71hfJBKaAvFP/X7WYM0TbscEk6nK1pHaWQUWUEA+WJD0VlT8wF+HIJANMV9B/DouPWwDnX3w/l9BA=="],
