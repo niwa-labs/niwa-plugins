@@ -2,6 +2,7 @@
 
 import { expect, test } from "bun:test";
 
+import { decisionText } from "../src/cockpit/decisions.ts";
 import { matchRecord } from "@niwa-labs/cockpit-sdk";
 
 import type { Reading, WatchState } from "../src/cockpit/actions.ts";
@@ -76,4 +77,13 @@ test("the list is read again after a record that moves a session or a run betwee
     expect([type, matchRecord(REFRESH_ON, at(type))]).toEqual([type, true]);
   }
   expect(matchRecord(REFRESH_ON, at("session.activity"))).toBe(false);
+});
+
+test("a merge claim and a refused write identify the affected entity in the watch", () => {
+  expect(decisionText({ type: "forge.pr.merge.started", data: {
+    operation: "op1", pr: { repo: { host: "git.example", path: "work/project" }, number: 2 },
+  } })).toBe("Merge requested · git.example/work/project!2");
+  expect(decisionText({ type: "niwa.record.refused", actor: { kind: "client", id: "planner" }, data: {
+    recordType: "plan.revised", entity: "work", reason: "revision changed",
+  } })).toBe("planner · plan.revised · work · revision changed");
 });

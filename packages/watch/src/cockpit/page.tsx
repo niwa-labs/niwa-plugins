@@ -3,11 +3,14 @@
 import { EntityLink, recordList, useCall, useProjection } from "@niwa-labs/cockpit-sdk";
 import { Badge, StateRing } from "@niwa-labs/ui-kit";
 
+import { decisionText, decisionTypes } from "./decisions.ts";
 import { listAction, type Reading } from "./actions.ts";
 import { KIND_LABEL, REFRESH_ON, RING, STATE_LABEL, agoText, countByState, incidents, ordered, subjectName, subjectText, troubled, type Incident } from "./subjects.ts";
 
 /** The flags the live feed holds: recent ones, not the whole history. */
 const FLAGS = recordList({ types: ["watch.stuck", "watch.recovered"] }, 200);
+
+const DECISIONS = recordList({ types: decisionTypes }, 200);
 
 function SubjectLink({ subject }: { subject: string }) {
   const name = subjectName(subject);
@@ -51,6 +54,10 @@ function IncidentRow({ incident, now }: { incident: Incident; now: number }) {
 export function WatchPage() {
   const subjects = useCall(listAction, {}, { refreshOn: { types: REFRESH_ON.types } });
   const flags = incidents(useProjection(FLAGS));
+  const decisions = useProjection(DECISIONS).flatMap(row => {
+    const text = decisionText(row);
+    return text ? [{ id: row.id, at: row.at, text }] : [];
+  });
   const now = Date.now();
   return (
     <div className="flex min-w-0 flex-col gap-4 p-4">
@@ -77,6 +84,12 @@ export function WatchPage() {
           </ul>
         </>
       )}
+      {decisions.length > 0 && <section>
+        <h3 className="text-sm font-semibold text-muted-foreground">Recent merge activity and refused writes</h3>
+        <ul className="divide-y rounded-lg border px-3">
+          {decisions.slice().reverse().map(row => <li key={row.id} className="py-2 text-sm">{row.text} · {agoText(row.at, now)}</li>)}
+        </ul>
+      </section>}
       <section className="flex min-w-0 flex-col gap-2">
         <h3 className="text-sm font-semibold text-muted-foreground">Recently stuck and recovered</h3>
         {flags.length === 0 ? (
