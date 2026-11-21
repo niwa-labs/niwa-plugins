@@ -65,7 +65,7 @@ import {
 import type { ContextItem, MemoryName, NoteId, NoteView, PageView, SearchHit, Withheld } from "./records.ts";
 import { holds, holdsFor } from "./holds.ts";
 import { rank } from "./search.ts";
-import { similar } from "./similar.ts";
+import { same } from "./same.ts";
 import { topLayer } from "./top.ts";
 
 export * from "./records.ts";
@@ -284,11 +284,11 @@ export function memory(options: MemoryOptions = {}): Plugin {
           if (input.source.kind === "owner" && by.kind !== "owner") {
             throw new MemoryRefusal("not-owner", "only the owner gives a note the owner as its source: what someone else says of him is their word");
           }
-          // The memory holds it already, in nearly the same words: it gains a source, not a copy.
+          // The memory holds it already, in the same words: it gains a source, not a copy.
           const memories = now();
           const held = memories
             .notesOf(memory)
-            .find((one) => holds(one) && one.about === input.about && one.project === input.project && similar(one.text, input.text));
+            .find((one) => holds(one) && one.about === input.about && one.project === input.project && same(one.text, input.text));
           if (held !== undefined) {
             if (!memories.counts(memory, held.note, sourceKey(input.source, by))) {
               await ctx.emit(NoteCorroborated, { memory, note: held.note, source: input.source, by });

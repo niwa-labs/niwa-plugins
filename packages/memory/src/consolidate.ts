@@ -6,7 +6,7 @@
 
 import { holds } from "./holds.ts";
 import type { NoteView } from "./records.ts";
-import { similar } from "./similar.ts";
+import { same } from "./same.ts";
 
 /** The limits a consolidation keeps. */
 export interface ConsolidationLimits {
@@ -55,7 +55,7 @@ export function consolidate(
   for (const [at, one] of live.entries()) {
     if (gone.has(one.note)) continue;
     for (const other of live.slice(at + 1)) {
-      if (gone.has(other.note) || gone.has(one.note) || one.about !== other.about || one.project !== other.project || !similar(one.text, other.text)) continue;
+      if (gone.has(other.note) || gone.has(one.note) || one.about !== other.about || one.project !== other.project || !same(one.text, other.text)) continue;
       // The older is kept, unless only the newer has the owner behind it; a note placed by hand is never merged away.
       const keepNewer = (other.confirmed && !one.confirmed) || (other.pinned && !one.pinned);
       const [kept, away] = keepNewer ? [other, one] : [one, other];

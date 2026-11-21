@@ -297,7 +297,7 @@ const At = z.number().int().nonnegative();
 
 export const memoryNote = actionRef("memory.note", {
   description:
-    "Writes a note to a memory: one conclusion (`text`), what backs it (`detail`, kept home), whom it is about (the owner or the work), the project it holds for, and its source. An agent writes to its own memory; a source of `owner` is only the owner's to give. A note the memory already holds in nearly the same words gains a source instead of a copy (`corroborated`).",
+    "Writes a note to a memory: one conclusion (`text`), what backs it (`detail`, kept home), whom it is about (the owner or the work), the project it holds for, and its source. An agent writes to its own memory; a source of `owner` is only the owner's to give. A note the memory already holds in the same words gains a source instead of a copy (`corroborated`).",
   input: z.object({
     ...Named,
     text: NoteText,

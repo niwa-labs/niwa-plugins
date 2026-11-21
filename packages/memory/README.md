@@ -30,8 +30,8 @@ kept in its canonical form: `/a/b/../c/` is `/a/c`) and its
 source: the owner's own word, the writer's conclusion, a session up to a
 locator, or a record. Only the owner gives a note the owner as its source;
 his confirmation or correction makes a note his word, and a correction by
-anyone else makes it unconfirmed again. A note written again in nearly the
-same words gains a source instead of a copy.
+anyone else makes it unconfirmed again. A note written again in the
+same words, in the same order, gains a source instead of a copy.
 
 A note stops being shown first (`memory.drop`), is taken back
 (`memory.retract`), or is erased (`memory.erase`). The journal is written
