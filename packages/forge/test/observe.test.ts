@@ -144,6 +144,34 @@ test("a tag's pipeline is a tag however it is read, though a list does not say t
   expect((await read({ sha: sha("v1-tip"), kind: "tag" })).items).toHaveLength(1);
 });
 
+test("a job that moves while its pipeline stays running is written at each state it was seen in", async () => {
+  const host = await watched();
+  const run = host.server.pipeline(host.billing, { sha: sha("main-tip"), ref: "main", status: "running" });
+  const job = host.server.job(host.billing, { pipeline: run.id, ref: "main", status: "pending" });
+  await syncNow(host);
+  job.status = "running";
+  await syncNow(host);
+  job.status = "success";
+  await syncNow(host);
+  expect((await dataOf(host, JobObserved.name)).map((one) => [one["state"], one["previous"]])).toEqual([
+    ["pending", undefined],
+    ["running", "pending"],
+    ["success", "running"],
+  ]);
+  expect(await dataOf(host, PipelineObserved.name)).toHaveLength(1);
+});
+
+test("a pipeline whose jobs could not be read is read again by the next pass, not taken as done", async () => {
+  const host = await watched();
+  const run = host.server.pipeline(host.billing, { sha: sha("main-tip"), ref: "main", status: "success" });
+  host.server.job(host.billing, { pipeline: run.id, ref: "main", status: "success" });
+  host.server.queue("GET", /\/pipelines\/\d+\/jobs$/, 429, { message: "slow down" }, { "Retry-After": "0" });
+  await expect(syncNow(host)).rejects.toThrow(/429|limit/);
+  await syncNow(host);
+  expect((await dataOf(host, JobObserved.name)).map((one) => one["state"])).toEqual(["success"]);
+  expect((await dataOf(host, PipelineObserved.name)).map((one) => one["state"])).toEqual(["success"]);
+});
+
 test("the checks of a pull request follow the pipelines of its head", async () => {
   const host = await watched();
   const mr = openMr(host);

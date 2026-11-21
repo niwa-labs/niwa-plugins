@@ -66,6 +66,9 @@ export interface SyncPlace {
 
 const NULL_SHA = /^0+$/;
 
+/** The states of a pipeline that has not ended and is not waiting for a person: its jobs still move. */
+const ACTIVE = new Set<RunState>(["created", "waiting_for_resource", "preparing", "pending", "running", "scheduled"]);
+
 /** The id of a record a pass writes: `forge:<host>:<project>:<what>`. */
 function idOf(repo: Repo, what: string): string {
   return `forge:${repo.host}:${String(repo.projectId)}:${what}`;
@@ -270,22 +273,28 @@ export async function sync(place: SyncPlace, repo: Repo, since = 0): Promise<num
   const raw = await gitlab.get<GitLabPipeline[]>(projectPath(repo, "/pipelines"), { per_page: 50, order_by: "updated_at", sort: "desc" });
   for (const one of [...raw].sort((a, b) => a.id - b.id)) {
     const last = seen.pipelines.get(one.id);
-    if (last?.state === runStateOf(one.status)) continue;
-    const pipeline = await pipelineOf(repo, one, lookups);
-    if (pipeline === undefined) continue;
-    const version = (last?.version ?? 0) + 1;
-    await write(PipelineObserved, { ...pipeline, ...(last === undefined ? {} : { previous: last.state }), source: { kind: "observed", version } }, idOf(repo, `pipeline:${String(one.id)}:v${String(version)}`));
+    const state = runStateOf(one.status);
+    const changed = last?.state !== state;
+    // A pipeline that is still moving has jobs that move with it, whether or not its own state did.
+    if (!changed && !ACTIVE.has(state)) continue;
+    const pipeline = changed ? await pipelineOf(repo, one, lookups) : undefined;
+    if (changed && pipeline === undefined) continue;
+    // The jobs are written before the pipeline's new version: a pass cut off in between leaves the
+    // pipeline changed, and the next pass reads its jobs again.
     for (const job of await gitlab.list<GitLabJob>(projectPath(repo, `/pipelines/${String(one.id)}/jobs`))) {
       const was = seen.jobs.get(job.id);
-      const state = runStateOf(job.status);
-      if (was?.state === state) continue;
+      const jobState = runStateOf(job.status);
+      if (was?.state === jobState) continue;
       const jobVersion = (was?.version ?? 0) + 1;
       await write(
         JobObserved,
-        { repo, pipeline: one.id, job: job.id, name: job.name, stage: job.stage, state, ...(was === undefined ? {} : { previous: was.state }), source: { kind: "observed", version: jobVersion } },
+        { repo, pipeline: one.id, job: job.id, name: job.name, stage: job.stage, state: jobState, ...(was === undefined ? {} : { previous: was.state }), source: { kind: "observed", version: jobVersion } },
         idOf(repo, `job:${String(job.id)}:v${String(jobVersion)}`),
       );
     }
+    if (pipeline === undefined) continue;
+    const version = (last?.version ?? 0) + 1;
+    await write(PipelineObserved, { ...pipeline, ...(last === undefined ? {} : { previous: last.state }), source: { kind: "observed", version } }, idOf(repo, `pipeline:${String(one.id)}:v${String(version)}`));
   }
 
   // Checks of the open pull requests, from the pipelines of their heads.
