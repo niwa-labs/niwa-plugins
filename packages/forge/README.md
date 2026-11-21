@@ -18,13 +18,19 @@ value never reaches the journal. `fetch` may be passed to speak to a fake server
   writes and merges, `<host>/<path>/ref/<ref>` for pipelines and jobs. A run
   fills a template such as `forge.pr.merge@{repo.host}/{repo.path}/pr/*`.
 - `forge.pr.merge` is irreversible. A merge the server takes for later is
-  listed by `forge.pr.merge.pending`, with the action that calls it off.
+  listed by `forge.pr.merge.pending`, with the action that calls it off; the
+  module checks it against the server whether or not the repository is watched,
+  and records the end as `forge.pr.merge.settled` when nobody watching saw it.
 - `forge.pr.list` lists the pull requests the module observed (open ones first) with the checks of each head and
   its latest pipelines; it reads what was recorded and asks the server nothing.
 - `forge.repo.watch` records a repository; the module then polls it. Events of
   the server's log are recorded under their event ids; changes of pull
   requests, pipelines, jobs and checks as numbered observations with the state
-  before them.
+  before them. A transition of a pull request (opened, reopened, merged, closed)
+  is one record whether the log or a look at the server tells it first.
+- `forge.repo.status` says, per watched repository since the host started, when
+  it was last polled, what the last poll failed with and whether the event log
+  was read back far enough.
 - `/records`: record types, action references and target helpers.
 - `/flow`: `untilPipeline` and `land` for workflow scripts. `land` with `auto`
   reads the pull request between its waits, so a script that uses it lists

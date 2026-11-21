@@ -4,7 +4,8 @@
  * An observed record has an id that says where the fact came from (`Source`): an event of the
  * server's own event log carries the server's event id, so the same event is written once however
  * often it is read; a change the module saw between two polls carries the version of its
- * observation and the state before it, so `open → closed → open` is three records and not one.
+ * observation and the state before it, so `open → closed → open` is three records and not one. A
+ * transition of a pull request is written once under an id of its own whichever of the two tells it.
  * A change that came and went between two polls is invisible, and a record never claims more than
  * what was seen.
  *

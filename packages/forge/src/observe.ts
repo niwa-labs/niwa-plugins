@@ -3,9 +3,12 @@
  *
  * One pass (`sync`) reads the server and writes what changed since the journal last said:
  *
- * - The project's event log gives pushes, pull requests opened, merged and closed, approvals and
- *   comments. Each is written under the server's event id, so an event read twice is one record,
- *   and the journal is the cursor: the next pass reads on after the last event it holds.
+ * - The project's event log gives pushes, pull requests opened, reopened, merged and closed, approvals
+ *   and comments. A push, an approval or a comment is written under the server's event id, so an
+ *   event read twice is one record, and the journal is the cursor: the next pass reads on after
+ *   the last event it holds. A transition of a pull request has one id whichever of the log and a
+ *   look at the server tells it first (the pull request and the number of the transition), and the
+ *   record's `source` says which did.
  * - Pull requests, pipelines, jobs and checks have no events of their own. Their state is compared
  *   with the last one the journal holds; a change is written as a new version of the observation,
  *   with the state before it. A record of a version never carries the time of the pass, so a pass
