@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
 
+import { isCallTarget } from "@niwa-labs/core";
 import type { Action } from "@niwa-labs/core";
 import { createNiwa, tempHome, testClock } from "@niwa-labs/testing";
 import type { Plugin, PluginApi } from "@niwa-labs/plugin";
 
 import { plan } from "../src/index.ts";
-import { planGet, planList, planSet } from "../src/records.ts";
+import { planGet, planList, planSet, planTarget } from "../src/records.ts";
 import type { PlanItem } from "../src/records.ts";
 
 const decide: PlanItem = { id: "shape", text: "Choose the storage shape", state: "open" };
@@ -148,4 +149,9 @@ test("setting a plan is a record of niwa's own, and reading is a read", () => {
   expect(actions.get("plan.get")).toMatchObject({ effect: "read", world: "niwa" });
   expect(actions.get("plan.list")).toMatchObject({ effect: "read", world: "niwa" });
   expect(set?.target?.({ of: "task-1", items: [] })).toBe("task-1");
+});
+
+test("the target of a plan is one a grant can name, whatever the plan is of", () => {
+  for (const of of ["task-1", "a b", "feature/x", "star*", "{id}@host:1"]) expect(isCallTarget(planTarget(of))).toBe(true);
+  expect(planTarget("feature/x*")).toBe("feature%2Fx%2A");
 });

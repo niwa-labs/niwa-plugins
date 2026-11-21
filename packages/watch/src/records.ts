@@ -105,11 +105,24 @@ export const Reading = z.object({
 });
 export type Reading = z.infer<typeof Reading>;
 
+/**
+ * What a grant's `@target` names a subject by: `session/<harness>/<id>` or `run/<id>`, each segment
+ * encoded so that no text can add a wildcard or a separator (`watch.get@session/claude/*`).
+ */
+export function subjectTarget(subject: Subject): string {
+  const encoded = (text: string): string => encodeURIComponent(text).replace(/\*/g, "%2A");
+  const [kind, ...rest] = subject.split(":");
+  const name = rest.join(":");
+  if (kind === "run") return `run/${encoded(name)}`;
+  const space = name.indexOf(" ");
+  return `session/${encoded(name.slice(0, space))}/${encoded(name.slice(space + 1))}`;
+}
+
 export const watchGet = actionRef("watch.get", {
   description: "Read the state of a session or a run from the journal: what it is doing, since when, and its last sign of life.",
   input: z.object({ subject: Subject }),
   output: Reading,
-  target: (input) => input.subject,
+  target: (input) => subjectTarget(input.subject),
 });
 
 export const watchList = actionRef("watch.list", {

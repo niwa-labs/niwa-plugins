@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { z } from "zod";
 
-import { record } from "@niwa-labs/core";
+import { isCallTarget, record } from "@niwa-labs/core";
 import type { Action, StoredRecord } from "@niwa-labs/core";
 import { plugin } from "@niwa-labs/plugin";
 import type { Plugin, PluginApi } from "@niwa-labs/plugin";
@@ -9,7 +9,7 @@ import { createNiwa, eventually, tempHome, testClock } from "@niwa-labs/testing"
 import type { TestClock } from "@niwa-labs/testing";
 
 import { watch } from "../src/index.ts";
-import { WatchRecovered, WatchStuck, sessionSubject, watchGet, watchList } from "../src/records.ts";
+import { WatchRecovered, WatchStuck, runSubject, sessionSubject, subjectTarget, watchGet, watchList } from "../src/records.ts";
 
 const MINUTE = 60_000;
 const START = 1_000_000;
@@ -253,5 +253,13 @@ test("the watch only reads: its actions are reads of niwa's own state", () => {
   const actions = actionsOf(watch());
   expect([...actions.keys()].sort()).toEqual(["watch.get", "watch.list"]);
   for (const one of actions.values()) expect(one).toMatchObject({ effect: "read", world: "niwa", recovery: "repeat" });
-  expect(actions.get("watch.get")?.target?.({ subject: me })).toBe(me);
+  expect(actions.get("watch.get")?.target?.({ subject: me })).toBe("session/claude/abc");
+  expect(actions.get("watch.get")?.target?.({ subject: runSubject("run-1") })).toBe("run/run-1");
+});
+
+test("the target of a call to read a subject is one a grant can name, whatever the id holds", () => {
+  for (const subject of [me, sessionSubject("pi", "a b/c*{x}@y:z"), runSubject("run/1 *")]) {
+    expect(isCallTarget(subjectTarget(subject))).toBe(true);
+  }
+  expect(subjectTarget(sessionSubject("pi", "a/*"))).toBe("session/pi/a%2F%2A");
 });

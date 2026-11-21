@@ -82,6 +82,11 @@ export const PlanSummary = z.object({
 });
 export type PlanSummary = z.infer<typeof PlanSummary>;
 
+/** What a grant's `@target` names a plan by: one segment, so any text a plan is of stays one place. */
+export function planTarget(of: string): string {
+  return encodeURIComponent(of).replace(/\*/g, "%2A");
+}
+
 export const planSet = actionRef("plan.set", {
   description:
     "Write a revision of the plan of `of`: its goal and the whole list of items, each with a state (`open` is a decision still ahead). " +
@@ -94,14 +99,14 @@ export const planSet = actionRef("plan.set", {
     expect: z.number().int().nonnegative().optional(),
   }),
   output: z.object({ of: PlanSubject, rev: z.number().int().positive(), revised: z.boolean() }),
-  target: (input) => input.of,
+  target: (input) => planTarget(input.of),
 });
 
 export const planGet = actionRef("plan.get", {
   description: "Read the plan of `of`: its latest revision, or the one asked for with `rev`.",
   input: z.object({ of: PlanSubject, rev: z.number().int().positive().optional() }),
   output: PlanView,
-  target: (input) => input.of,
+  target: (input) => planTarget(input.of),
 });
 
 export const planList = actionRef("plan.list", {

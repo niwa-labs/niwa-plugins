@@ -14,7 +14,7 @@ decision still ahead), `planned`, `done` or `dropped`.
 | `plan.list { open? }` | read / niwa | Each plan at its latest revision with its count of open items; `open: true` keeps those with a decision ahead. |
 
 `plan.set` and `plan.get` name the plan as their `@target`, so a grant can be limited to one plan
-(`plan.set@task-3fa9c2`).
+(`plan.set@task-3fa9c2`). The name is one segment: `/`, spaces and other characters a target cannot hold are encoded.
 
 What an agent ticks off while it works is not here: that checklist is read through the history of
 its session.

@@ -67,6 +67,10 @@
       "dependencies": {
         "@niwa-labs/core": "*",
         "@niwa-labs/plugin": "*",
+        "zod": "^4.6.7",
+      },
+      "devDependencies": {
+        "@niwa-labs/testing": "*",
       },
     },
     "packages/watch": {
@@ -75,6 +79,10 @@
       "dependencies": {
         "@niwa-labs/core": "*",
         "@niwa-labs/plugin": "*",
+        "zod": "^4.6.7",
+      },
+      "devDependencies": {
+        "@niwa-labs/testing": "*",
       },
     },
   },

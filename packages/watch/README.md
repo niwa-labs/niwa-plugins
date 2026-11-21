@@ -15,7 +15,9 @@ A subject is a session (`session:<harness> <native id>`) or a run (`run:<id>`). 
 | `stuck` | Working and silent for too long, or cancelled and held up by a shielded scope. |
 | `unknown` | The journal does not say: a session another harness runs was just seen, or a turn ended with no known outcome. |
 
-`watch.get { subject }` and `watch.list { state? }` read the states now (effect `read`, world `niwa`).
+`watch.get { subject }` and `watch.list { state? }` read the states now (effect `read`, world `niwa`). A grant names
+the subject of `watch.get` as `session/<harness>/<id>` or `run/<id>`, each segment encoded, so
+`watch.get@session/claude/*` covers one harness.
 
 ## Records
 
