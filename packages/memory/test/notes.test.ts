@@ -96,3 +96,16 @@ test("a client with the owner's token speaks as the owner", async () => {
     await client.close();
   }
 });
+
+test("an erased note leaves no trace in what the memory shows, and the same words make a new note", async () => {
+  const host = await memoryHost();
+  const { note } = await host.as<Noted>(owner, "memory.note", { memory: "rin", text: "My door code is 4711.", about: "owner", source: { kind: "owner" } });
+  await host.as(rin, "memory.lift", { note });
+  await host.as(owner, "memory.erase", { memory: "rin", note });
+  expect((await host.as<{ notes: string[] }>(rin, "memory.top", {})).notes).toEqual([]);
+  expect((await host.as<{ hits: unknown[] }>(rin, "memory.search", { query: "door code 4711" })).hits).toEqual([]);
+  expect((await host.as<{ items: unknown[] }>(rin, "memory.context", { memory: "rin", query: "door code", purpose: "to let a courier in" })).items).toEqual([]);
+  const again = await host.as<Noted & { corroborated: boolean }>(owner, "memory.note", { memory: "rin", text: "My door code is 4711.", about: "owner", source: { kind: "owner" } });
+  expect(again.corroborated).toBe(false);
+  expect(again.note).not.toBe(note);
+});
