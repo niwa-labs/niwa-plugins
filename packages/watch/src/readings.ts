@@ -84,6 +84,7 @@ const PauseRequested = z.object({ run: Text, kind: z.string().optional() });
 const Continued = z.object({ run: Text, pause: z.string() });
 const RequestMade = z.object({
   id: Text,
+  to: z.object({ kind: z.string() }),
   from: z.object({ kind: z.string(), harness: z.string().optional(), id: z.string().optional() }).optional(),
 });
 const OfRequest = z.object({ id: Text });
@@ -125,6 +126,8 @@ interface Track {
   pause?: { readonly cancelOnly: boolean };
   /** The pause someone asked for, or the deadline that was reached, until the continue that names it. */
   manual?: { readonly id: string; readonly deadline: boolean };
+  /** The requests the subject asked that are open, each with whether it is put to the owner. */
+  asked: Map<string, boolean>;
   /** The steps of the run's invocation that have begun and not ended, by key, with the action each calls. */
   steps: Map<string, string>;
   /** The keys of the wakes the run's invocation has asked for and not had. */
@@ -429,7 +432,11 @@ export class Model {
           from?.kind === "session" && from.harness !== undefined && from.id !== undefined
             ? sessionSubject(from.harness, from.id)
             : this.ofActor(row)?.subject;
-        if (subject !== undefined) this.requests.set(data.data.id, subject);
+        const track = subject === undefined ? undefined : this.tracks.get(subject);
+        if (subject === undefined) return;
+        this.requests.set(data.data.id, subject);
+        // Only a question to the owner waits for a person; one to a session or another address waits for what answers it.
+        track?.asked.set(data.data.id, data.data.to.kind === "owner");
         return;
       }
       case "request.answered":
@@ -440,7 +447,9 @@ export class Model {
         const subject = this.requests.get(data.data.id);
         this.requests.delete(data.data.id);
         const track = subject === undefined ? undefined : this.tracks.get(subject);
-        if (track !== undefined) track.last = at;
+        if (track === undefined) return;
+        track.asked.delete(data.data.id);
+        track.last = at;
         return;
       }
       case "timer.sleep.requested": {
@@ -533,15 +542,19 @@ export class Model {
 
   /** What holds a subject that would otherwise be working: a question to a person, a paused run, a sleep, a wait. */
   private heldState(track: Track): Reading["state"] | undefined {
-    const asked = [...this.requests.values()].includes(track.subject);
-    if (track.kind === "session") return asked && track.base !== "unknown" ? "waiting-human" : undefined;
+    const asked = track.asked.size > 0;
+    const person = [...track.asked.values()].includes(true);
+    if (track.kind === "session") {
+      if (!asked || track.base === "unknown") return undefined;
+      return person ? "waiting-human" : "waiting-event";
+    }
     if (!track.started) return track.base === "idle" ? "idle" : undefined;
     // A deadline that was reached pauses the run from that moment; a pause someone asked for, when the run reaches a boundary.
     if (track.manual?.deadline === true) return "waiting-human";
     if (track.pause !== undefined || track.invocationState === "paused") return "waiting-human";
     if (track.manual !== undefined && track.invocationState === "waiting") return "waiting-human";
     if (track.invocationState !== "waiting") return undefined;
-    if (asked) return "waiting-human";
+    if (person) return "waiting-human";
     return this.sleeping(track) ? "sleeping" : "waiting-event";
   }
 
@@ -561,7 +574,7 @@ export class Model {
 
   private create(subject: Subject, kind: Track["kind"], at: number): Track | undefined {
     if (this.gone.has(subject)) return undefined;
-    const track: Track = { subject, kind, base: "idle", managed: false, since: at, last: at, started: kind === "session", steps: new Map(), timers: new Set(), shields: new Map() };
+    const track: Track = { subject, kind, base: "idle", managed: false, since: at, last: at, started: kind === "session", asked: new Map(), steps: new Map(), timers: new Set(), shields: new Map() };
     this.tracks.set(subject, track);
     return track;
   }

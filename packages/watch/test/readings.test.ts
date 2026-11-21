@@ -122,6 +122,19 @@ describe("sessions", () => {
     expect(read(model, me, 32 * MINUTE)).toMatchObject({ state: "working", last: 31 * MINUTE });
   });
 
+  test("a question to another session is waiting for an event, not for a person", () => {
+    const asker = { kind: "session", harness: "claude", id: "abc" };
+    const model = modelOf([...turn(0), row("request.created", { id: "req-1", to: { kind: "session", harness: "codex", id: "x1" }, from: asker }, MINUTE)]);
+    expect(read(model, me, 30 * MINUTE)).toMatchObject({ state: "waiting-event" });
+    // A person's question beside it makes the session wait for the person.
+    model.apply(row("request.created", { id: "req-2", to: { kind: "owner" }, from: asker }, 2 * MINUTE));
+    expect(read(model, me, 30 * MINUTE)).toMatchObject({ state: "waiting-human" });
+    model.apply(row("request.cancelled", { id: "req-2" }, 3 * MINUTE));
+    expect(read(model, me, 30 * MINUTE)).toMatchObject({ state: "waiting-event" });
+    model.apply(row("request.answered", { id: "req-1", answer: {} }, 4 * MINUTE));
+    expect(read(model, me, 5 * MINUTE)).toMatchObject({ state: "working" });
+  });
+
   test("a session of another harness is unknown when first seen, working with its progress, idle when it pauses", () => {
     const named = { harness: "codex", native: "x1" };
     const subject = sessionSubject("codex", "x1");
@@ -257,6 +270,14 @@ describe("runs", () => {
       row("niwa.invocation.state", { invocation: "inv-1", state: "waiting" }, 2 * MINUTE),
     ]);
     expect(model.readingOf(run, 30 * MINUTE)).toMatchObject({ state: "sleeping" });
+  });
+
+  test("a run that asked a session waits for an event; one that asked the owner waits for a person", () => {
+    const model = modelOf([...started(), row("niwa.invocation.state", { invocation: "inv-1", state: "waiting" }, MINUTE)]);
+    model.apply(row("request.created", { id: "req-s", to: { kind: "session", harness: "codex", id: "x1" } }, 2 * MINUTE, inv));
+    expect(model.readingOf(run, 30 * MINUTE)).toMatchObject({ state: "waiting-event" });
+    model.apply(row("request.created", { id: "req-o", to: { kind: "owner" } }, 3 * MINUTE, inv));
+    expect(model.readingOf(run, 30 * MINUTE)).toMatchObject({ state: "waiting-human" });
   });
 
   const state = (value: string, at: number, invocation = "inv-1") => row("niwa.invocation.state", { invocation, state: value }, at);
