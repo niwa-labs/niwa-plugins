@@ -9,7 +9,7 @@ import { z } from "zod";
 import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
 import { AGENT_BRIEFING, AGENT_PROMPT_SECTION, AGENT_TYPES, BriefingSectionOutput, PromptSectionInput, PromptSectionOutput, agentBriefing, agentGet } from "@niwa-labs/agent/records";
 import type { AgentDefinitionInput } from "@niwa-labs/agent/records";
-import { baseStack, createNiwa, tempHome, testClock } from "@niwa-labs/testing";
+import { baseStack, createNiwa, gate, tempHome, testClock } from "@niwa-labs/testing";
 import type { Host, TestClock } from "@niwa-labs/testing";
 
 import { memory } from "../../src/index.ts";
@@ -81,7 +81,7 @@ export function agentsStandIn(agents: readonly AgentDefinitionInput[] = [], hold
 }
 
 /** The module with its actions kept as it registers them, so a check can run one under an operation of its own. */
-function capturing(made: Plugin): { plugin: Plugin; actions: Map<string, Action<any, any>> } {
+function capturing(made: Plugin, afterClaim?: () => Promise<void>): { plugin: Plugin; actions: Map<string, Action<any, any>> } {
   const actions = new Map<string, Action<any, any>>();
   const wrapped = plugin(
     made.name,
@@ -91,7 +91,15 @@ function capturing(made: Plugin): { plugin: Plugin; actions: Map<string, Action<
           if (key === "action") {
             return (one: Action<any, any>) => {
               actions.set(one.name, one);
-              target.action(one);
+              if (one.name !== "memory.consolidate" || afterClaim === undefined) return target.action(one);
+              target.action({ ...one, run: (input, ctx) => one.run(input, {
+                ...ctx,
+                async emit(type, data) {
+                  const written = await ctx.emit(type, data);
+                  if (type.name === "memory.consolidation.started") await afterClaim();
+                  return written;
+                },
+              }) });
             };
           }
           const value: unknown = Reflect.get(target, key);
@@ -138,7 +146,7 @@ export const bob: Address = { kind: "agent", id: "bob" };
 export { owner };
 
 /** A host with the memory module; the options are the module's, `agents` the agents the stand-in knows. */
-export async function memoryHost(options: Omit<MemoryOptions, "bind"> = {}, more: { agents?: AgentDefinitionInput[]; after?: Plugin[]; hold?: Promise<void>; home?: Home; without?: boolean } = {}): Promise<MemoryHost> {
+export async function memoryHost(options: Omit<MemoryOptions, "bind"> = {}, more: { agents?: AgentDefinitionInput[]; after?: Plugin[]; afterClaim?: () => Promise<void>; hold?: Promise<void>; home?: Home; without?: boolean } = {}): Promise<MemoryHost> {
   const home = more.home ?? (await tempHome());
   const clock = testClock(Date.UTC(2026, 10, 1));
   const niwa = createNiwa({ home: home.path, clock });
@@ -149,7 +157,7 @@ export async function memoryHost(options: Omit<MemoryOptions, "bind"> = {}, more
     if (caller.kind === "client" && caller.principal?.kind === "owner") return owner;
     return undefined;
   };
-  const { plugin: module, actions } = capturing(memory({ ...options, bind }));
+  const { plugin: module, actions } = capturing(memory({ ...options, bind }), more.afterClaim);
   niwa.use(...baseStack().plugins, agentsStandIn(more.agents, more.hold), ...(more.without === true ? [] : [module]), ...(more.after ?? []));
   await niwa.serve();
   let closed = false;
@@ -209,4 +217,13 @@ export async function until(host: MemoryHost, type: string, count = 1, ms = 10_0
     await Bun.sleep(20);
   }
   throw new Error(`fewer than ${String(count)} ${type} were written`);
+}
+
+// The crash test holds a real client call immediately after admission of its claim.
+if (import.meta.main) {
+  const path = process.argv[2]!;
+  await memoryHost({}, {
+    home: {path, cleanup: async () => {}},
+    afterClaim: () => gate(path, "finish-consolidation").wait(),
+  });
 }

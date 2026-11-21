@@ -596,6 +596,13 @@ export function memory(options: MemoryOptions = {}): Plugin {
       }),
     );
 
+    const planConsolidation = (memory: MemoryName) => {
+      const memories = now();
+      return consolidate(memories.notesOf(memory), limits, clock(), (note, merged) =>
+        memories.sourcesWith(memory, note.note, merged.map((one) => one.note)),
+      );
+    };
+
     api.action(
       action(memoryConsolidate, {
         // A consolidation made again finds its work done: it is planned from the memory as it stands.
@@ -606,11 +613,20 @@ export function memory(options: MemoryOptions = {}): Plugin {
           const { memory } = reach(ctx, input.memory);
           const recorded = wrote(ctx, Consolidated, 2);
           if (recorded !== undefined) return memoryConsolidate.output.parse(recorded.data);
+          const reader = journal();
+          const [latest] = reader.tail({ types: [ConsolidationStarted.name, Consolidated.name], filter: { memory } }, 1);
+          if (latest?.type === ConsolidationStarted.name && reader.openingSeq !== undefined && latest.seq <= reader.openingSeq) {
+            const { operation } = ConsolidationStarted.schema.parse(latest.data);
+            if (latest.id === recordId(`${operation}/emit/1`)) {
+              const result = await api.emit(Consolidated, { memory, operation, ...planConsolidation(memory) }, {
+                id: recordId(`${operation}/emit/2`),
+                links: [latest.id],
+              });
+              if (operation === ctx.operationId) return memoryConsolidate.output.parse(result.data);
+            }
+          }
           await ctx.emit(ConsolidationStarted, { memory, operation: ctx.operationId });
-          const memories = now();
-          const done = consolidate(memories.notesOf(memory), limits, clock(), (note, merged) =>
-            memories.sourcesWith(memory, note.note, merged.map((one) => one.note)),
-          );
+          const done = planConsolidation(memory);
           await ctx.emit(Consolidated, { memory, operation: ctx.operationId, ...done });
           return { memory, ...done };
         },
