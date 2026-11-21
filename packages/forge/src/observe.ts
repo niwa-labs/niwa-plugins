@@ -93,10 +93,11 @@ export class Seen {
   #upto = 0;
   /** The highest event id written. */
   lastEvent = 0;
-  /** The pull requests whose opening, merge or close is written. */
-  readonly opened = new Set<number>();
-  readonly merged = new Set<number>();
-  readonly closed = new Set<number>();
+  /**
+   * Where each pull request stands by the records, and how many times it was opened and closed:
+   * the transitions are numbered, so each one has a single identity whoever tells it first.
+   */
+  readonly life = new Map<number, { state: "open" | "closed" | "merged"; opens: number; closes: number }>();
   /** The last head, fields and checks written of each pull request, and how many observations of each. */
   readonly heads = new Map<number, { head: string; version: number }>();
   readonly fields = new Map<number, { title: string; base: string; draft: boolean; version: number }>();
@@ -135,17 +136,20 @@ export class Seen {
         map.set(key, { ...value, version: Math.max(version, map.get(key)?.version ?? 0) } as V);
       switch (stored.type) {
         case PrOpened.name: {
-          this.opened.add(number);
+          const was = this.life.get(number);
+          this.life.set(number, { state: "open", opens: (was?.opens ?? 0) + 1, closes: was?.closes ?? 0 });
           const opened = data as unknown as { title: string; base: string };
           if (!this.fields.has(number)) this.fields.set(number, { title: opened.title, base: opened.base, draft: false, version: 0 });
           break;
         }
         case PrMerged.name:
-          this.merged.add(number);
+          this.life.set(number, { opens: 0, closes: 0, ...this.life.get(number), state: "merged" });
           break;
-        case PrClosed.name:
-          this.closed.add(number);
+        case PrClosed.name: {
+          const was = this.life.get(number);
+          this.life.set(number, { opens: was?.opens ?? 0, closes: (was?.closes ?? 0) + 1, state: "closed" });
           break;
+        }
         case PrHead.name:
           at(this.heads, number, { head: data["head"] as string });
           break;
@@ -246,29 +250,51 @@ export async function sync(place: SyncPlace, repo: Repo, since = 0): Promise<num
       await write(PrReview, { pr: pr(number), reviewer: author ?? "", state: event.action_name, source }, id);
       continue;
     }
-    if (!["opened", "accepted", "closed"].includes(event.action_name)) continue;
+    // What the journal already says of the pull request decides whether the event tells anything new:
+    // a transition seen first by a look at the server is the same one when its event comes late.
+    const stand = () => seen.life.get(number);
+    const action = event.action_name;
+    if (action === "opened" && stand() !== undefined) continue;
+    if (action === "reopened" && stand()?.state !== "closed") continue;
+    if (action === "accepted" && stand()?.state === "merged") continue;
+    if (action === "closed" && (stand()?.state === "closed" || stand()?.state === "merged")) continue;
+    if (!["opened", "reopened", "accepted", "closed"].includes(action)) continue;
     const mr = await mrOf(number);
     if (mr === undefined) continue;
-    if (event.action_name === "opened") {
-      await write(PrOpened, { pr: pr(number), title: mr.title, branch: mr.source_branch, base: mr.target_branch, ...(author === undefined ? {} : { author }), source }, id);
-    } else if (event.action_name === "accepted") {
+    if (action === "opened" || action === "reopened") {
+      const opens = (stand()?.opens ?? 0) + 1;
+      await write(
+        PrOpened,
+        { pr: pr(number), title: mr.title, branch: mr.source_branch, base: mr.target_branch, ...(author === undefined ? {} : { author }), ...(action === "reopened" ? { reopened: true } : {}), source },
+        idOf(repo, `pr:${String(number)}:opened:${String(opens)}`),
+      );
+    } else if (action === "accepted") {
       const made = pullRequestOf(repo, mr);
-      await write(PrMerged, { pr: pr(number), base: mr.target_branch, head: mr.sha, ...(made.mergeSha === undefined ? {} : { mergeSha: made.mergeSha }), ...(author === undefined ? {} : { by: author }), source }, id);
+      await write(PrMerged, { pr: pr(number), base: mr.target_branch, head: mr.sha, ...(made.mergeSha === undefined ? {} : { mergeSha: made.mergeSha }), ...(author === undefined ? {} : { by: author }), source }, idOf(repo, `pr:${String(number)}:merged`));
     } else {
-      await write(PrClosed, { pr: pr(number), ...(author === undefined ? {} : { by: author }), source }, id);
+      const closes = (stand()?.closes ?? 0) + 1;
+      await write(PrClosed, { pr: pr(number), ...(author === undefined ? {} : { by: author }), source }, idOf(repo, `pr:${String(number)}:closed:${String(closes)}`));
     }
   }
 
-  // Pull requests: the open ones, and the ones whose end the journal does not hold yet.
-  const known = new Set([...seen.opened].filter((number) => !seen.merged.has(number) && !seen.closed.has(number)));
+  // Pull requests: the open ones, and the ones the journal holds as open that are not any more.
+  const known = [...seen.life].filter(([, one]) => one.state === "open").map(([number]) => number);
   const open = await gitlab.list<GitLabMr>(projectPath(repo, "/merge_requests"), { state: "opened" });
-  const ended = await Promise.all([...known].filter((number) => !open.some((mr) => mr.iid === number)).map((number) => mrOf(number)));
+  const ended = await Promise.all(known.filter((number) => !open.some((mr) => mr.iid === number)).map((number) => mrOf(number)));
   for (const mr of [...open, ...ended]) {
     if (mr === undefined) continue;
     const number = mr.iid;
     const observed = (version: number): Source => ({ kind: "observed", version });
-    if (!seen.opened.has(number)) {
-      await write(PrOpened, { pr: pr(number), title: mr.title, branch: mr.source_branch, base: mr.target_branch, ...(mr.author?.username === undefined ? {} : { author: mr.author.username }), source: observed(1) }, idOf(repo, `pr:${String(number)}:opened`));
+    const author = mr.author?.username === undefined ? {} : { author: mr.author.username };
+    // First seen, or open again after the journal closed it: a transition is numbered by how many came before.
+    const before = seen.life.get(number);
+    if (before === undefined || (before.state === "closed" && mr.state === "opened")) {
+      const opens = (before?.opens ?? 0) + 1;
+      await write(
+        PrOpened,
+        { pr: pr(number), title: mr.title, branch: mr.source_branch, base: mr.target_branch, ...author, ...(before === undefined ? {} : { reopened: true }), source: observed(opens) },
+        idOf(repo, `pr:${String(number)}:opened:${String(opens)}`),
+      );
     }
     const head = seen.heads.get(number);
     if (head?.head !== mr.sha) {
@@ -281,12 +307,13 @@ export async function sync(place: SyncPlace, repo: Repo, since = 0): Promise<num
       const version = fields.version + 1;
       await write(PrUpdated, { pr: pr(number), title: mr.title, base: mr.target_branch, draft, source: observed(version) }, idOf(repo, `pr:${String(number)}:updated:v${String(version)}`));
     }
-    if (mr.state === "merged" && !seen.merged.has(number)) {
+    if (mr.state === "merged" && seen.life.get(number)?.state !== "merged") {
       const made = pullRequestOf(repo, mr);
       await write(PrMerged, { pr: pr(number), base: mr.target_branch, head: mr.sha, ...(made.mergeSha === undefined ? {} : { mergeSha: made.mergeSha }), source: observed(1) }, idOf(repo, `pr:${String(number)}:merged`));
     }
-    if (mr.state === "closed" && !seen.closed.has(number)) {
-      await write(PrClosed, { pr: pr(number), source: observed(1) }, idOf(repo, `pr:${String(number)}:closed`));
+    if (mr.state === "closed" && seen.life.get(number)?.state === "open") {
+      const closes = (seen.life.get(number)?.closes ?? 0) + 1;
+      await write(PrClosed, { pr: pr(number), source: observed(closes) }, idOf(repo, `pr:${String(number)}:closed:${String(closes)}`));
     }
   }
 

@@ -13,10 +13,12 @@ import {
   Poller,
   PrComment,
   PrHead,
+  PrClosed,
   PrMerged,
   PrOpened,
   Pushed,
   forgePipelineRead,
+  forgePrList,
   forgePrMerge,
   forgePrMergePending,
   forgeRepoSync,
@@ -75,6 +77,54 @@ test("a pull request opened and merged is written from the event log, and a merg
   await syncNow(host);
   expect(await dataOf(host, PrMerged.name)).toEqual([expect.objectContaining({ base: "main", head: sha("topic-1"), mergeSha: sha("merge-7"), by: "marge" })]);
   expect((await host.niwa.call(forgePrMergePending, {})).items).toEqual([]);
+});
+
+test("one merge is one record for a subscriber, whether the log or a look at the pull request told it first", async () => {
+  const host = await watched();
+  const mr = openMr(host);
+  host.server.event(host.billing, { action_name: "opened", target_type: "MergeRequest", target_iid: 7 });
+  await syncNow(host);
+  // The merge shows on the pull request before its event is in the log.
+  Object.assign(mr, { state: "merged", merge_commit_sha: sha("merge-7") });
+  await syncNow(host);
+  host.server.event(host.billing, { action_name: "accepted", target_type: "MergeRequest", target_iid: 7, author: { username: "marge" } });
+  await syncNow(host);
+  await syncNow(host);
+  expect(await dataOf(host, PrMerged.name)).toEqual([expect.objectContaining({ mergeSha: sha("merge-7"), source: { kind: "observed", version: 1 } })]);
+});
+
+test("a pull request closed and opened again is each state in turn, from the log and from a look at the open ones", async () => {
+  const host = await watched();
+  const mr = openMr(host);
+  const list = async () => (await host.niwa.call(forgePrList, {})).items.map((one) => one.state);
+  await syncNow(host);
+  expect(await list()).toEqual(["open"]);
+  mr.state = "closed";
+  await syncNow(host);
+  expect(await list()).toEqual(["closed"]);
+  // Reopened between two polls: only the open list shows it.
+  mr.state = "opened";
+  await syncNow(host);
+  expect(await list()).toEqual(["open"]);
+  // Closed and reopened with the log saying so.
+  mr.state = "closed";
+  host.server.event(host.billing, { action_name: "closed", target_type: "MergeRequest", target_iid: 7 });
+  await syncNow(host);
+  expect(await list()).toEqual(["closed"]);
+  mr.state = "opened";
+  host.server.event(host.billing, { action_name: "reopened", target_type: "MergeRequest", target_iid: 7 });
+  await syncNow(host);
+  expect(await list()).toEqual(["open"]);
+  mr.state = "closed";
+  await syncNow(host);
+  expect(await list()).toEqual(["closed"]);
+  expect((await dataOf(host, PrOpened.name)).map((one) => [one["reopened"], (one["source"] as { kind: string }).kind])).toEqual([
+    [undefined, "observed"],
+    [true, "observed"],
+    [true, "event"],
+  ]);
+  expect((await dataOf(host, PrClosed.name)).map((one) => (one["source"] as { kind: string }).kind)).toEqual(["observed", "event", "observed"]);
+  expect(await syncNow(host)).toEqual({ written: 0 });
 });
 
 test("a comment is written as its author, size and digest, never its text", async () => {
@@ -216,13 +266,13 @@ test("a projection takes from the journal only what it gained since the last tim
   add("forge.pr.opened", opened(2, 43));
   const seen = new Seen(repo);
   seen.absorb(journal);
-  expect([...seen.opened]).toEqual([1]);
+  expect([...seen.life.keys()]).toEqual([1]);
   expect(returned).toBe(2);
   seen.absorb(journal);
   expect(returned).toBe(2);
   add("forge.pr.opened", opened(3, 42));
   seen.absorb(journal);
-  expect([...seen.opened]).toEqual([1, 3]);
+  expect([...seen.life.keys()]).toEqual([1, 3]);
   expect(returned).toBe(3);
 });
 

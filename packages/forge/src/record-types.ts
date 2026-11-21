@@ -132,7 +132,10 @@ export const Pushed = record(
   }),
 );
 
-/** A pull request as it was opened. */
+/**
+ * A pull request as it was opened, or opened again: a closed pull request that is reopened is
+ * written again with `reopened`, so a subscriber sees `open → closed → open` as three records.
+ */
 export const PrOpened = record(
   "forge.pr.opened",
   z.strictObject({
@@ -143,6 +146,7 @@ export const PrOpened = record(
     /** The branch it is to be merged into. */
     base: RefName,
     author: ForgeUser.optional(),
+    reopened: z.boolean().optional(),
     source: Source,
   }),
 );

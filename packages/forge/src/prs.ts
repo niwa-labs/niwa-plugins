@@ -52,11 +52,11 @@ export function observedPrs(journal: JournalReader | undefined, filter: { repo?:
       case PrOpened.name: {
         const parsed = PrOpened.schema.safeParse(stored.data);
         if (!parsed.success) break;
-        const { pr, title, branch, base, author } = parsed.data;
+        const { pr, title, branch, base, author, reopened } = parsed.data;
         const before = found.get(keyOf(pr));
         found.set(keyOf(pr), {
           pr,
-          state: before?.state ?? "open",
+          state: reopened === true ? "open" : (before?.state ?? "open"),
           title,
           branch,
           base,
