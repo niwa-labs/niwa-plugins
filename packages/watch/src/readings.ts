@@ -12,7 +12,7 @@
 
 import { z } from "zod";
 
-import { stableJson } from "@niwa-labs/core";
+import { keyUnder, stableJson } from "@niwa-labs/core";
 import type { StoredRecord } from "@niwa-labs/core";
 
 import { Subject, runSubject, sessionSubject } from "./records.ts";
@@ -69,12 +69,15 @@ const Activity = z.object({ session: SessionNamed, tool: z.string().optional(), 
 const OfRun = z.object({ run: Text });
 const Scope = z.object({ run: Text, scope: Text, shield: z.boolean().optional() });
 const OfInvocation = z.object({ invocation: Text });
-const Cancelled = z.object({ invocation: Text, except: z.array(z.string()).optional() });
+const Cancelled = z.object({ invocation: Text, prefixes: z.array(z.string()).optional(), except: z.array(z.string()).optional() });
+const Outcome = z.object({ invocation: Text, key: z.string() });
 const Intent = z.object({ invocation: Text, key: z.string(), action: z.string(), input: z.unknown() });
 /** The keys of the steps the workflow bridge writes beside the step of a call: `<key>~auth`, `~now`, `~mark`, `~arm`, `~ended`. */
 const ASIDE = /~(auth|now|mark|arm|ended)$/;
 /** The action a sleep records as its step. */
 const WAIT_ACTION = "niwa.wait";
+/** The action a wait of a script for a record, with or without a timeout, records as its step. */
+const SCRIPT_WAIT_ACTION = "workflow.script.wait";
 const InvocationState = z.object({ invocation: Text, state: z.string() });
 const Paused = z.object({ run: Text, choices: z.array(z.string()).optional() });
 const PauseRequested = z.object({ run: Text, kind: z.string().optional() });
@@ -122,6 +125,10 @@ interface Track {
   pause?: { readonly cancelOnly: boolean };
   /** The pause someone asked for, or the deadline that was reached, until the continue that names it. */
   manual?: { readonly id: string; readonly deadline: boolean };
+  /** The steps of the run's invocation that have begun and not ended, by key, with the action each calls. */
+  steps: Map<string, string>;
+  /** The keys of the wakes the run's invocation has asked for and not had. */
+  timers: Set<string>;
   /** The shielded scopes that are open, each with the moment a cancel spared it, once one has. */
   shields: Map<string, number | undefined>;
 }
@@ -364,21 +371,29 @@ export class Model {
         const track = this.ofInvocation(data.data.invocation);
         if (track === undefined) return;
         track.last = at;
+        track.steps.set(data.data.key, data.data.action);
         // The steps the bridge adds around a call (its permission, the clock, the arming of a wake) and the
         // sleep itself are signs of life: they are not the script repeating a call.
         if (!ASIDE.test(data.data.key) && data.data.action !== WAIT_ACTION) this.repeat(track, stableJson([data.data.action, data.data.input]), at);
         return;
       }
       case "niwa.step.outcome": {
-        const data = OfInvocation.safeParse(row.data);
+        const data = Outcome.safeParse(row.data);
         const track = data.success ? this.ofInvocation(data.data.invocation) : undefined;
-        if (track !== undefined) track.last = at;
+        if (track === undefined || !data.success) return;
+        track.steps.delete(data.data.key);
+        track.last = at;
         return;
       }
       case "niwa.step.cancelled": {
         const data = Cancelled.safeParse(row.data);
         const track = data.success ? this.ofInvocation(data.data.invocation) : undefined;
         if (track === undefined || !data.success) return;
+        // The steps it holds are over, whether or not an outcome is ever written for them.
+        const { prefixes = [], except = [] } = data.data;
+        for (const key of [...track.steps.keys()]) {
+          if (prefixes.some((prefix) => keyUnder(key, prefix)) && !except.some((spared) => keyUnder(key, spared))) track.steps.delete(key);
+        }
         // A cancel names the open shields it spares in `except`: those are the scopes that go on past it.
         for (const scope of data.data.except ?? []) {
           if (track.shields.has(scope) && track.shields.get(scope) === undefined) track.shields.set(scope, at);
@@ -434,7 +449,9 @@ export class Model {
         // The key of a sleep is the invocation and the sleeping place: `<invocation>:<place>`.
         const invocation = row.actor.kind === "handler" ? (row.actor.invocation as string) : data.data.key.split(":")[0];
         const track = invocation === undefined ? undefined : this.ofInvocation(invocation);
-        if (track !== undefined) this.sleeps.set(data.data.key, track.subject);
+        if (track === undefined) return;
+        this.sleeps.set(data.data.key, track.subject);
+        track.timers.add(data.data.key);
         return;
       }
       case "timer.slept": {
@@ -443,7 +460,9 @@ export class Model {
         const subject = this.sleeps.get(data.data.key);
         this.sleeps.delete(data.data.key);
         const track = subject === undefined ? undefined : this.tracks.get(subject);
-        if (track !== undefined) track.last = at;
+        if (track === undefined) return;
+        track.timers.delete(data.data.key);
+        track.last = at;
         return;
       }
       case "watch.stuck": {
@@ -523,13 +542,26 @@ export class Model {
     if (track.manual !== undefined && track.invocationState === "waiting") return "waiting-human";
     if (track.invocationState !== "waiting") return undefined;
     if (asked) return "waiting-human";
-    if ([...this.sleeps.values()].includes(track.subject)) return "sleeping";
-    return "waiting-event";
+    return this.sleeping(track) ? "sleeping" : "waiting-event";
+  }
+
+  /**
+   * Whether the run waits for a moment: a sleep of its own is open with its wake not yet come, and no wait for a record
+   * is. A wait with a timeout arms the same wake as a sleep, but a record can end it, and a wake left over from a wait
+   * that a record ended is not what a later wait waits for.
+   */
+  private sleeping(track: Track): boolean {
+    let asleep = false;
+    for (const [key, action] of track.steps) {
+      if (action === SCRIPT_WAIT_ACTION) return false;
+      if (action === WAIT_ACTION && track.invocation !== undefined && track.timers.has(`${track.invocation}:${key}`)) asleep = true;
+    }
+    return asleep;
   }
 
   private create(subject: Subject, kind: Track["kind"], at: number): Track | undefined {
     if (this.gone.has(subject)) return undefined;
-    const track: Track = { subject, kind, base: "idle", managed: false, since: at, last: at, started: kind === "session", shields: new Map() };
+    const track: Track = { subject, kind, base: "idle", managed: false, since: at, last: at, started: kind === "session", steps: new Map(), timers: new Set(), shields: new Map() };
     this.tracks.set(subject, track);
     return track;
   }
@@ -566,6 +598,9 @@ export class Model {
     if (track.invocation !== undefined) this.byInvocation.delete(track.invocation);
     track.invocation = undefined;
     track.invocationState = undefined;
+    track.steps.clear();
+    track.timers.clear();
+    for (const [key, owner] of this.sleeps) if (owner === track.subject) this.sleeps.delete(key);
   }
 
   /** The run whose handler wrote a record, when one did. */

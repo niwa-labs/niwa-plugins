@@ -216,9 +216,11 @@ describe("runs", () => {
     const model = modelOf([...started(), row("niwa.invocation.state", { invocation: "inv-1", state: "waiting" }, MINUTE)]);
     expect(model.readingOf(run, 60 * MINUTE)).toMatchObject({ state: "waiting-event" });
 
+    model.apply(intent("nap", null, 2 * MINUTE, "niwa.wait"));
     model.apply(row("timer.sleep.requested", { at: 90 * MINUTE, key: "inv-1:nap" }, 2 * MINUTE, inv));
     expect(model.readingOf(run, 60 * MINUTE)).toMatchObject({ state: "sleeping" });
     model.apply(row("timer.slept", { key: "inv-1:nap" }, 90 * MINUTE));
+    model.apply(row("niwa.step.outcome", { invocation: "inv-1", key: "nap", outcome: {} }, 90 * MINUTE));
     expect(model.readingOf(run, 91 * MINUTE)).toMatchObject({ state: "waiting-event" });
 
     model.apply(row("request.created", { id: "req-9", to: { kind: "owner" } }, 92 * MINUTE, inv));
@@ -226,6 +228,35 @@ describe("runs", () => {
     model.apply(row("request.expired", { id: "req-9" }, 121 * MINUTE));
     model.apply(row("niwa.invocation.state", { invocation: "inv-1", state: "running" }, 121 * MINUTE));
     expect(model.readingOf(run, 122 * MINUTE)).toMatchObject({ state: "working" });
+  });
+
+  test("a wait with a timeout waits for an event, and a timer left behind does not make a later wait a sleep", () => {
+    const outcome = (key: string, at: number) => row("niwa.step.outcome", { invocation: "inv-1", key, outcome: {} }, at);
+    const model = modelOf([
+      ...started(),
+      intent("w1", { type: "x.done", place: "inv-1:w1" }, MINUTE, "workflow.script.wait"),
+      row("timer.sleep.requested", { at: 90 * MINUTE, key: "inv-1:w1" }, MINUTE, inv),
+      row("niwa.invocation.state", { invocation: "inv-1", state: "waiting" }, MINUTE),
+    ]);
+    expect(model.readingOf(run, 30 * MINUTE)).toMatchObject({ state: "waiting-event" });
+    // The record came before the timer ran out; its timer is still armed when the run waits again.
+    model.apply(outcome("w1", 2 * MINUTE));
+    model.apply(row("niwa.invocation.state", { invocation: "inv-1", state: "running" }, 2 * MINUTE));
+    model.apply(intent("w2", { type: "y.done" }, 3 * MINUTE, "workflow.script.wait"));
+    model.apply(row("niwa.invocation.state", { invocation: "inv-1", state: "waiting" }, 3 * MINUTE));
+    expect(model.readingOf(run, 30 * MINUTE)).toMatchObject({ state: "waiting-event" });
+  });
+
+  test("a sleep that is cancelled with its branch is no longer what the run waits for", () => {
+    const model = modelOf([
+      ...started(),
+      intent("nap", null, MINUTE, "niwa.wait"),
+      row("timer.sleep.requested", { at: 90 * MINUTE, key: "inv-1:nap" }, MINUTE, inv),
+      intent("w", { type: "x.done" }, MINUTE, "workflow.script.wait"),
+      row("niwa.step.cancelled", { invocation: "inv-1", prefixes: ["w"], reason: "enough" }, 2 * MINUTE),
+      row("niwa.invocation.state", { invocation: "inv-1", state: "waiting" }, 2 * MINUTE),
+    ]);
+    expect(model.readingOf(run, 30 * MINUTE)).toMatchObject({ state: "sleeping" });
   });
 
   const state = (value: string, at: number, invocation = "inv-1") => row("niwa.invocation.state", { invocation, state: value }, at);
