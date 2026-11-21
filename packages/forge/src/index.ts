@@ -66,7 +66,7 @@ import { DEFAULT_INTERVALS, Poller, Seen, sync } from "./observe.ts";
 import type { PollIntervals } from "./observe.ts";
 import { observedPrs } from "./prs.ts";
 import type { GitLabJob, GitLabMr, GitLabPipeline } from "./normalize.ts";
-import { FORGE_TYPES, Pushed, RepoUnwatched, RepoWatched } from "./record-types.ts";
+import { FORGE_TYPES, MergeStarted, Pushed, RepoUnwatched, RepoWatched } from "./record-types.ts";
 import type { Pipeline, Repo } from "./record-types.ts";
 import { resolveSecret } from "./secrets.ts";
 import { Servers, projectPath, repoKey, watchedRepos, watching } from "./servers.ts";
@@ -618,6 +618,7 @@ export function forge(options: ForgeOptions): Plugin {
 
     api.action(
       action(forgePrMerge, {
+        terminalClaim: MergeStarted.name,
         recovery: "do-not-repeat",
         effect: "irreversible",
         world: "external",
