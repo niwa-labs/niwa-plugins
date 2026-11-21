@@ -3,7 +3,10 @@
 
 import type { StoredRecord } from "@niwa-labs/core";
 
-import { DigestTaken, NoteConfirmed, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageWritten } from "./records.ts";
+import { stableJson } from "@niwa-labs/core";
+import type { Address } from "@niwa-labs/core";
+
+import { DigestTaken, NoteConfirmed, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageWritten, ShareAnswered, ShareWanted } from "./records.ts";
 import type { MemoryName, NoteId, NoteView, PageName, PageView } from "./records.ts";
 
 /** A record type with its schema: what the fold parses a stored record with. */
@@ -29,16 +32,25 @@ export interface TakenDigest {
   readonly seq: number;
 }
 
+/** Where the owner's word on a note leaving for an address stands: asked, or answered. */
+export type ShareState = "asked" | "allowed" | "refused";
+
+/** The key of the owner's word on one revision of one note for one address. */
+function shareKey(memory: MemoryName, note: NoteId, revision: number, to: Address): string {
+  return `${memory} ${note} ${String(revision)} ${stableJson(to)}`;
+}
+
 /** The notes of every memory, as far as the records folded so far say. */
 export class Memories {
   readonly #notes = new Map<MemoryName, Map<NoteId, NoteView>>();
   readonly #pages = new Map<MemoryName, Map<PageName, PageView>>();
   readonly #digests = new Map<MemoryName, TakenDigest[]>();
+  readonly #shares = new Map<string, ShareState>();
   /** The position of the last record folded. */
   seq = 0;
 
   /** The record types a fold reads. */
-  static readonly TYPES: readonly string[] = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken].map((type) => type.name);
+  static readonly TYPES: readonly string[] = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered].map((type) => type.name);
 
   /** The notes of one memory, in the order they were written. */
   notesOf(memory: MemoryName): NoteView[] {
@@ -68,6 +80,22 @@ export class Memories {
   /** The digests taken into one memory, oldest first. */
   digestsOf(memory: MemoryName): readonly TakenDigest[] {
     return this.#digests.get(memory) ?? [];
+  }
+
+  /** Where the owner's word on a note leaving for an address stands, for the note's revision now. */
+  share(memory: MemoryName, note: NoteId, revision: number, to: Address): ShareState | undefined {
+    return this.#shares.get(shareKey(memory, note, revision, to));
+  }
+
+  /** Erase here what `later` erased: an erased note is not read back at any position. */
+  eraseAsIn(later: Memories): void {
+    for (const [memory, notes] of this.#notes) {
+      for (const [id, note] of notes) {
+        if (later.note(memory, id)?.status !== "erased") continue;
+        const { detail: _dropped, ...rest } = note;
+        notes.set(id, { ...rest, text: "", status: "erased", top: false });
+      }
+    }
   }
 
   /** Fold one more record. Records come in the order of the journal. */
@@ -104,6 +132,17 @@ export class Memories {
       const digests = this.#digests.get(taken.memory) ?? [];
       this.#digests.set(taken.memory, digests);
       digests.push({ turn: taken.turn, record: taken.record, session: taken.session, ...(taken.project === undefined ? {} : { project: taken.project }), seq: at });
+      return;
+    }
+    const wanted = dataAs(stored, ShareWanted);
+    if (wanted !== undefined) {
+      const key = shareKey(wanted.memory, wanted.note, wanted.revision, wanted.for);
+      if (!this.#shares.has(key)) this.#shares.set(key, "asked");
+      return;
+    }
+    const answered = dataAs(stored, ShareAnswered);
+    if (answered !== undefined) {
+      this.#shares.set(shareKey(answered.memory, answered.note, answered.revision, answered.for), answered.allowed ? "allowed" : "refused");
       return;
     }
     const page = dataAs(stored, PageWritten);

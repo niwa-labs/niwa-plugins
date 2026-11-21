@@ -12,13 +12,16 @@
 
 import { createHash } from "node:crypto";
 
-import { action, owner, recordId, recordTypeName, seq } from "@niwa-labs/core";
+import { action, agent as agentAddress, addressText, confirmOptions, isYes, owner, recordId, recordTypeName, seq, stableJson } from "@niwa-labs/core";
 import type { ActionContext, Address, Caller, JournalReader } from "@niwa-labs/core";
 import { plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
 import { AGENT_BRIEFING, AgentAttached, AgentTurnQueued, SessionDigestTaken, agentGet } from "@niwa-labs/agent/records";
 import type { TurnAuthor } from "@niwa-labs/agent/records";
 
+import { QuestionName, RequestAnswered, requestAsk } from "@niwa-labs/requests/records";
+
+import { release } from "./context.ts";
 import { Memories } from "./fold.ts";
 import type { TakenDigest } from "./fold.ts";
 import {
@@ -32,8 +35,11 @@ import {
   NoteRetracted,
   NoteWritten,
   PageWritten,
+  ShareAnswered,
+  ShareWanted,
   memoryBrief,
   memoryConfirm,
+  memoryContext,
   memoryCorrect,
   memoryDrop,
   memoryErase,
@@ -45,9 +51,10 @@ import {
   memoryPageWrite,
   memoryRetract,
   memorySearch,
+  memoryShare,
   memoryTop,
 } from "./records.ts";
-import type { MemoryName, NoteId, NoteView, PageView, SearchHit } from "./records.ts";
+import type { ContextItem, MemoryName, NoteId, NoteView, PageView, SearchHit, Withheld } from "./records.ts";
 import { holds, holdsFor } from "./holds.ts";
 import { rank } from "./search.ts";
 import { topLayer } from "./top.ts";
@@ -80,7 +87,7 @@ export const DEFAULT_LIMITS: MemoryLimits = { top: 4_000, sessions: 200 };
 export class MemoryRefusal extends Error {
   override name = "MemoryRefusal";
   constructor(
-    readonly code: "not-yours" | "no-memory" | "not-owner" | "no-note" | "no-page" | "stale-page" | "erased" | "unbound",
+    readonly code: "not-yours" | "no-memory" | "not-owner" | "no-note" | "no-page" | "stale-page" | "erased" | "unbound" | "no-addressee",
     message: string,
   ) {
     super(message);
@@ -159,6 +166,9 @@ export function searchable(
   return [...ofNotes, ...ofPages, ...ofDigests].sort((a, b) => a.order - b.order).map(({ text, value }) => ({ text, value }));
 }
 
+/** The name of the question that asks the owner whether a note about him may leave a memory. */
+const SHARE_QUESTION = QuestionName.parse("memory.share");
+
 /** The memory module. */
 export function memory(options: MemoryOptions = {}): Plugin {
   const bind = options.bind ?? ownerOnly;
@@ -188,6 +198,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
         if (Number(stored.seq) > at) break;
         then.apply(stored);
       }
+      then.eraseAsIn(now());
       return then;
     };
 
@@ -482,6 +493,116 @@ export function memory(options: MemoryOptions = {}): Plugin {
         },
       }),
     );
+
+    /** Whom a context request is for: the address the caller speaks as, or the one a handler names. */
+    const addresseeOf = (ctx: ActionContext, named: Address | undefined): Address => {
+      const bound = bind(ctx.caller);
+      if (bound !== undefined) {
+        if (named !== undefined && stableJson(named) !== stableJson(bound)) {
+          throw new MemoryRefusal("not-yours", `${addressText(bound)} asks for itself: a caller bound to an address names no other addressee`);
+        }
+        return bound;
+      }
+      if (ctx.caller.kind === "client") throw new MemoryRefusal("unbound", "the caller is not bound to an address, so it is told nothing");
+      if (named === undefined) throw new MemoryRefusal("no-addressee", "name the addressee: whom the context is for");
+      return named;
+    };
+
+    api.action(
+      action(memoryContext, {
+        // It reads, and may write that a note about the owner is wanted: written once for each note and address.
+        recovery: "repeat",
+        effect: "record",
+        world: "niwa",
+        run: async (input, ctx) => {
+          const reader = addresseeOf(ctx, input.for);
+          const at = input.at ?? Number(journal().last());
+          const memories = asOf(input.at);
+          const home = reader.kind === "owner" || (reader.kind === "agent" && reader.id === input.memory);
+          let project: string | undefined;
+          if (!home && reader.kind === "agent") {
+            const got = await ctx.step.outcome(agentGet, { agent: reader.id });
+            project = got.status === "completed" ? got.value.definition.project?.cwd : undefined;
+          }
+          // What backs a note is searched only for its own readers: a match on it would tell of it.
+          const candidates = memories
+            .notesOf(input.memory)
+            .filter((note) => holds(note) && holdsFor(note.project, input.project))
+            .map((note) => ({ text: home ? `${note.text}\n${note.detail ?? ""}` : note.text, value: note }));
+          const items: ContextItem[] = [];
+          const withheld: Withheld[] = [];
+          for (const { value: note } of rank(input.query, candidates, input.limit)) {
+            const share = memories.share(input.memory, note.note, note.revision, reader);
+            const released = release(note, home ? { kind: "home" } : { kind: "other", ...(project === undefined ? {} : { project }) }, share);
+            if ("item" in released) {
+              items.push(released.item);
+              continue;
+            }
+            withheld.push(released.withheld);
+            // An answer read again at its position asks nobody.
+            if (released.ask && input.at === undefined) {
+              await ctx.emit(ShareWanted, { memory: input.memory, note: note.note, revision: note.revision, for: reader, purpose: input.purpose });
+            }
+          }
+          return { memory: agentAddress(input.memory), for: reader, at, items, withheld };
+        },
+      }),
+    );
+
+    api.action(
+      action(memoryShare, {
+        recovery: "repeat",
+        effect: "record",
+        world: "niwa",
+        idempotent: true,
+        run: async (input, ctx) => {
+          if (bind(ctx.caller)?.kind !== "owner") throw new MemoryRefusal("not-owner", "only the owner says whether a note about him may leave");
+          const found = changeable(input.memory, input.note);
+          await ctx.emit(ShareAnswered, { memory: input.memory, note: input.note, revision: found.revision, for: input.for, allowed: input.allowed });
+          return { note: input.note, allowed: input.allowed };
+        },
+      }),
+    );
+
+    /** Whether the answer of a request is the owner's own: given by him, not found for him by a resolver. */
+    const ownersOwn = (request: string): boolean =>
+      journal()
+        .since(seq(0), [recordTypeName(RequestAnswered.name)])
+        .some((stored) => {
+          const parsed = RequestAnswered.schema.safeParse(stored.data);
+          return parsed.success && parsed.data.id === request && parsed.data.by?.kind === "owner" && parsed.data.how === undefined;
+        });
+
+    // A note about the owner that is wanted is asked of him, once for each revision and address; the
+    // asks wait apart, so one he leaves open holds up no other.
+    api.on(ShareWanted, { id: "share-ask", concurrency: Number.POSITIVE_INFINITY }, async (wanted, step) => {
+      const note = now().note(wanted.memory, wanted.note);
+      // Changed since it was wanted: the next request asks for it as it is then.
+      if (note === undefined || note.status !== "live" || note.revision !== wanted.revision) return;
+      const asked = await step.outcome(requestAsk, {
+        to: owner,
+        question: SHARE_QUESTION,
+        from: agentAddress(wanted.memory),
+        input: {
+          kind: "confirm",
+          title: `May ${addressText(wanted.for)} be told what ${addressText(agentAddress(wanted.memory))} remembers about you?`,
+          detail: `"${note.text}"\nWanted to: ${wanted.purpose}`,
+          options: confirmOptions(),
+        },
+      });
+      const decided = { memory: wanted.memory, note: wanted.note, revision: wanted.revision, for: wanted.for };
+      if (asked.status !== "completed" || !("answer" in asked.value)) {
+        await step.emit(ShareAnswered, { ...decided, allowed: false, reason: "unanswered" }, { key: "answered" });
+        return;
+      }
+      const { id, answer } = asked.value;
+      const his = ownersOwn(id);
+      await step.emit(
+        ShareAnswered,
+        { ...decided, allowed: his && isYes(answer), request: id, ...(his ? {} : { reason: "not-the-owner" as const }) },
+        { key: "answered" },
+      );
+    });
 
     api.summarize(() => {
       const memories = api.journal?.() === undefined ? undefined : now();

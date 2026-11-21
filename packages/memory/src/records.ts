@@ -10,6 +10,7 @@
 import { z } from "zod";
 
 import { Address, actionRef, record } from "@niwa-labs/core";
+import { RequestId } from "@niwa-labs/requests/records";
 import { AgentName, BriefingSectionInput, BriefingSectionOutput, SessionRefText, TurnAuthor } from "@niwa-labs/agent/records";
 
 /** Whose memory: the name of the agent it belongs to. */
@@ -149,8 +150,35 @@ export const DigestTaken = record(
   }),
 );
 
+/**
+ * A note about the owner was wanted by another address, for a purpose: it leaves the memory only on the
+ * owner's own answer, which is asked for once for each revision of the note and each address.
+ */
+export const ShareWanted = record(
+  "memory.share.wanted",
+  z.object({ memory: MemoryName, note: NoteId, revision: z.number().int().positive(), for: Address, purpose: z.string().min(1) }),
+);
+
+/**
+ * Whether a note about the owner may leave the memory for an address: the owner's answer to the question
+ * (`request`), or his word given directly. An answer that is not the owner's own, such as one a resolver
+ * found, lets nothing leave: `reason` says so.
+ */
+export const ShareAnswered = record(
+  "memory.share.answered",
+  z.object({
+    memory: MemoryName,
+    note: NoteId,
+    revision: z.number().int().positive(),
+    for: Address,
+    allowed: z.boolean(),
+    request: RequestId.optional(),
+    reason: z.enum(["not-the-owner", "unanswered"]).optional(),
+  }),
+);
+
 /** The record types the module declares. */
-export const MEMORY_TYPES = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken] as const;
+export const MEMORY_TYPES = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered] as const;
 
 /** Where a note stands. */
 export const NoteStatus = z.enum(["live", "retracted", "erased"]);
@@ -329,4 +357,67 @@ export const memoryBrief = actionRef("memory.brief", {
     "The memory's section of an agent's briefing: the top layer of its memory for the project it works on (its own, or the directory of the session attached last).",
   input: BriefingSectionInput,
   output: BriefingSectionOutput,
+});
+
+/**
+ * Where a conclusion told by a memory comes from: whose memory it is (the data owner's address), the note,
+ * and the position of the journal it stood at, so a later look at an answer reads the memory as it was.
+ */
+export const SourceRef = z.object({
+  owner: z.object({ kind: z.literal("agent"), id: MemoryName }),
+  note: NoteId,
+  seq: z.number().int().nonnegative(),
+});
+export type SourceRef = z.output<typeof SourceRef>;
+
+/** One conclusion a context answer tells: its text, whom it is about and where it holds, and its source. */
+export const ContextItem = z.object({
+  note: NoteId,
+  text: z.string(),
+  about: NoteAbout,
+  project: Project.optional(),
+  /** What backs it: told only to the memory's own agent and to the owner. */
+  detail: z.string().optional(),
+  confirmed: z.boolean(),
+  source: SourceRef,
+});
+export type ContextItem = z.output<typeof ContextItem>;
+
+/** A note that was relevant and did not leave, and why: it is about the owner, or holds for another project. */
+export const Withheld = z.object({
+  note: NoteId,
+  reason: z.enum(["about-the-owner", "another-project"]),
+  /** For a note about the owner: the owner was asked and has not answered, or he said no. */
+  status: z.enum(["asked", "refused"]).optional(),
+});
+export type Withheld = z.output<typeof Withheld>;
+
+export const memoryContext = actionRef("memory.context", {
+  description:
+    "Asks a memory for context: what it holds that bears on `query`, for an addressee and a purpose. Another agent is told only the conclusions with whom they are about and where they hold, never what backs them; a project's notes go to that project's agents; a note about the owner leaves only once the owner said yes, and he is asked. Every conclusion carries its source: the memory's address, the note and the position of the journal; give `at` to read the memory as it stood then.",
+  input: z.object({
+    memory: MemoryName,
+    query: z.string().min(1).max(500),
+    purpose: z.string().min(1).max(500),
+    /** Whom the context is for. A caller bound to an address asks for itself; a handler names the addressee. */
+    for: Address.optional(),
+    project: Project.optional(),
+    limit: z.number().int().positive().max(20).default(5),
+    at: At.optional(),
+  }),
+  output: z.object({
+    memory: z.object({ kind: z.literal("agent"), id: MemoryName }),
+    for: Address,
+    /** The position of the journal the answer was read at. */
+    at: z.number().int().nonnegative(),
+    items: z.array(ContextItem),
+    withheld: z.array(Withheld),
+  }),
+});
+
+export const memoryShare = actionRef("memory.share", {
+  description:
+    "The owner says whether a note about him may leave a memory for an address, without being asked. Only the owner may; his word holds for the note as it is now.",
+  input: z.object({ memory: MemoryName, note: NoteId, for: Address, allowed: z.boolean() }),
+  output: z.object({ note: NoteId, allowed: z.boolean() }),
 });
