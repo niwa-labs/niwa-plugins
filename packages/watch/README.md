@@ -48,6 +48,11 @@ A service reads new records on a clock (`tick`, 15 seconds) rather than through 
 record, which no handler can be woken by, and a handler is an invocation that writes records of its own for every sign
 of life.
 
+## Cockpit
+
+`./cockpit` is the plugin's page: every subject with its state, troubles first, and the recent `watch.stuck` and
+`watch.recovered` records as incidents. The incidents come from the live feed, so they are the recent ones.
+
 ## Options
 
 `watch({ silentAfter, loopRepeats, sessionLoopRepeats, shieldGrace, tick })`, all in milliseconds except the repeat

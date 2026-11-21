@@ -14,9 +14,11 @@
  * them the host has installed.
  */
 
+import { fileURLToPath } from "node:url";
+
 import { action, resolveQuery } from "@niwa-labs/core";
 import type { StoredRecord } from "@niwa-labs/core";
-import { plugin } from "@niwa-labs/plugin";
+import { COCKPIT_MODULE, plugin } from "@niwa-labs/plugin";
 import type { Plugin } from "@niwa-labs/plugin";
 
 import { DEFAULT_SETTINGS, Model, SOURCES, transitions } from "./readings.ts";
@@ -63,6 +65,8 @@ export function watch(options: WatchOptions = {}): Plugin {
 
   return plugin("watch", (api) => {
     api.declare(...WATCH_TYPES);
+    // The page of this plugin in the cockpit: a client module, offered by the path of its source.
+    api.offer(COCKPIT_MODULE, { id: "watch", entry: fileURLToPath(new URL("./cockpit/index.tsx", import.meta.url)) });
 
     const model = new Model();
     let cursor = 0;
