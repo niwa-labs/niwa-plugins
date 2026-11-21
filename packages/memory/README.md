@@ -64,11 +64,17 @@ conclusion, whom it is about and where it holds:
   addressee and that revision of the note. He is asked once
   (`request.ask`); an answer found by a resolver lets nothing leave, and
   `memory.share` gives his word without a question;
-- a project note goes to agents whose project contains it;
+- a project note goes to agents whose project contains it, and is not so
+  much as named to any other;
 - other work notes go to anyone who asks.
 
+Only what the addressee may be told is ranked, and `limit` counts only that;
+the notes about the owner that match are ranked apart and listed as
+withheld.
+
 Every conclusion names its source: the memory's address, the note, and the
-journal position it stood at. A request repeated with `at` reads the memory
+journal position it stood at. The memory is read once, at one position
+(`at` in the answer), so a request repeated with that `at` reads the memory
 as it was then.
 
 ## Intake and consolidation

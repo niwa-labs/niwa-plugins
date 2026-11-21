@@ -24,7 +24,8 @@ import { QuestionName, RequestAnswered, requestAsk } from "@niwa-labs/requests/r
 
 import { consolidate } from "./consolidate.ts";
 import type { ConsolidationLimits } from "./consolidate.ts";
-import { release } from "./context.ts";
+import { conclusion, standing } from "./context.ts";
+import type { Reader } from "./context.ts";
 import { Memories, sourceKey } from "./fold.ts";
 import type { TakenDigest } from "./fold.ts";
 import {
@@ -596,35 +597,39 @@ export function memory(options: MemoryOptions = {}): Plugin {
         world: "niwa",
         run: async (input, ctx) => {
           const reader = addresseeOf(ctx, input.for);
-          const at = input.at ?? Number(journal().last());
-          const memories = asOf(input.at);
           const home = reader.kind === "owner" || (reader.kind === "agent" && reader.id === input.memory);
+          // What the addressee works on is awaited first. From here to the answer nothing waits: the memory is
+          // read once, at one position, and every choice below is made of that one reading.
           let project: string | undefined;
           if (!home && reader.kind === "agent") {
             const got = await ctx.step.outcome(agentGet, { agent: reader.id });
             project = directoryOf(got.status === "completed" ? got.value.definition.project?.cwd : undefined);
           }
+          const at = input.at ?? Number(journal().last());
+          const memories = asOf(at);
+          const who: Reader = home ? { kind: "home" } : { kind: "other", ...(project === undefined ? {} : { project }) };
+          const holding = memories.notesOf(input.memory).filter((note) => holds(note) && holdsFor(note.project, input.project));
+          const stands = holding.map((note) => ({ note, standing: standing(note, who, memories.share(input.memory, note.note, note.revision, reader)) }));
           // What backs a note is searched only for its own readers: a match on it would tell of it.
-          const candidates = memories
-            .notesOf(input.memory)
-            .filter((note) => holds(note) && holdsFor(note.project, input.project))
-            .map((note) => ({ text: home ? `${note.text}\n${note.detail ?? ""}` : note.text, value: note }));
-          const items: ContextItem[] = [];
+          const readable = stands.filter((one) => one.standing === "told").map(({ note }) => ({ text: home ? `${note.text}\n${note.detail ?? ""}` : note.text, value: note }));
+          const items = rank(input.query, readable, input.limit).map(({ value }) => conclusion(value, who));
+          // The notes about the owner that match are ranked apart: they do not use up the room of what may be told.
+          const private_ = stands.filter((one) => one.standing === "private").map(({ note }) => ({ text: note.text, value: note }));
+          const matched = rank(input.query, private_, input.limit).map(({ value }) => value);
           const withheld: Withheld[] = [];
-          for (const { value: note } of rank(input.query, candidates, input.limit)) {
+          const asks: NoteView[] = [];
+          for (const note of matched) {
             const share = memories.share(input.memory, note.note, note.revision, reader);
-            const released = release(note, home ? { kind: "home" } : { kind: "other", ...(project === undefined ? {} : { project }) }, share);
-            if ("item" in released) {
-              items.push(released.item);
-              continue;
-            }
-            withheld.push(released.withheld);
-            // An answer read again at its position asks nobody.
-            if (released.ask && input.at === undefined) {
-              await ctx.emit(ShareWanted, { memory: input.memory, note: note.note, revision: note.revision, for: reader, purpose: input.purpose });
-            }
+            withheld.push({ note: note.note, reason: "about-the-owner", status: share === "refused" ? "refused" : "asked" });
+            if (share === undefined) asks.push(note);
           }
-          return { memory: agentAddress(input.memory), for: reader, at, items, withheld };
+          // An answer read again at its position asks nobody.
+          if (input.at === undefined) {
+            for (const note of asks) await ctx.emit(ShareWanted, { memory: input.memory, note: note.note, revision: note.revision, for: reader, purpose: input.purpose });
+          }
+          // A note erased while the answer was being written is not told.
+          const erased = now();
+          return { memory: agentAddress(input.memory), for: reader, at, items: items.filter((item) => erased.note(input.memory, item.note)?.status !== "erased"), withheld };
         },
       }),
     );

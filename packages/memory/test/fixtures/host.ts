@@ -18,7 +18,7 @@ import type { MemoryOptions } from "../../src/index.ts";
  * The agents module as far as the memory reads it: it declares the agents' records, answers `agent.get`
  * for the agents it is given, and writes a briefing of the sections plugins offer, as the module does.
  */
-export function agentsStandIn(agents: readonly AgentDefinitionInput[] = []): Plugin {
+export function agentsStandIn(agents: readonly AgentDefinitionInput[] = [], hold?: Promise<void>): Plugin {
   return plugin("agents", (api) => {
     api.declare(...AGENT_TYPES);
     api.action(
@@ -26,7 +26,9 @@ export function agentsStandIn(agents: readonly AgentDefinitionInput[] = []): Plu
         recovery: "repeat",
         effect: "read",
         world: "niwa",
-        run: ({ agent }) => {
+        run: async ({ agent }) => {
+          // A check holds the answer back to act while a caller waits for the agent's definition.
+          await hold;
           const definition = agents.find((one) => one.name === agent);
           if (definition === undefined) throw new Error(`there is no agent "${agent}"`);
           const address = { kind: "agent" as const, id: agent };
@@ -75,7 +77,7 @@ export const bob: Address = { kind: "agent", id: "bob" };
 export { owner };
 
 /** A host with the memory module; the options are the module's, `agents` the agents the stand-in knows. */
-export async function memoryHost(options: Omit<MemoryOptions, "bind"> = {}, more: { agents?: AgentDefinitionInput[]; after?: Plugin[] } = {}): Promise<MemoryHost> {
+export async function memoryHost(options: Omit<MemoryOptions, "bind"> = {}, more: { agents?: AgentDefinitionInput[]; after?: Plugin[]; hold?: Promise<void> } = {}): Promise<MemoryHost> {
   const home = await tempHome();
   const clock = testClock(Date.UTC(2026, 10, 1));
   const niwa = createNiwa({ home: home.path, clock });
@@ -86,7 +88,7 @@ export async function memoryHost(options: Omit<MemoryOptions, "bind"> = {}, more
     if (caller.kind === "client" && caller.principal?.kind === "owner") return owner;
     return undefined;
   };
-  niwa.use(...baseStack().plugins, agentsStandIn(more.agents), memory({ ...options, bind }), ...(more.after ?? []));
+  niwa.use(...baseStack().plugins, agentsStandIn(more.agents, more.hold), memory({ ...options, bind }), ...(more.after ?? []));
   await niwa.serve();
   let closed = false;
   const made: MemoryHost = {

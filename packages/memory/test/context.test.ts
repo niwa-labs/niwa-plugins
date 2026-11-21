@@ -73,7 +73,8 @@ test("a project's notes go to that project's agents, and stay home from the othe
   expect(forLead.items.map((item) => item.note).sort()).toEqual([billing, general].sort());
   const forBob = await ask(host, bob, { query: "invoices" });
   expect(forBob.items.map((item) => item.note)).toEqual([general]);
-  expect(forBob.withheld).toEqual([{ note: billing, reason: "another-project" }]);
+  // A note of another project is not even said to exist.
+  expect(forBob.withheld).toEqual([]);
 });
 
 test("a note about the owner leaves only once he said yes, and is asked again when it changes", async () => {
@@ -143,4 +144,32 @@ test("an answer read again at its position tells the memory as it stood then", a
   // Erased since, the note cannot be read back even at the old position.
   await host.as(owner, "memory.erase", { memory: "rin", note });
   expect((await ask(host, bob, { query: "fridays", at: then.at })).items).toEqual([]);
+});
+
+test("only what the reader may read is ranked, and the limit counts only that", async () => {
+  const host = await served();
+  await noted(host, { text: "Invoices, invoices and more invoices are made nightly.", project: "/work/shop" });
+  const owners = await noted(host, { text: "He wants invoices invoices invoices checked by hand.", about: "owner" });
+  const general = await noted(host, { text: "Invoices are checked by a person." });
+  const told = await ask(host, lead, { query: "invoices", limit: 1 });
+  expect(told.items.map((item) => item.note)).toEqual([general]);
+  expect(told.withheld).toEqual([{ note: owners, reason: "about-the-owner", status: "asked" }]);
+});
+
+test("an answer rests on one position even while the addressee's definition is awaited", async () => {
+  let release: () => void = () => {};
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const host = await memoryHost({}, { agents: AGENTS, hold });
+  await noted(host, { text: "Releases go out on Fridays." });
+  const pending = ask(host, undefined, { query: "releases", for: bob });
+  // While it waits, a note is written and a read moves the fold on.
+  await host.as(undefined, "memory.note", { memory: "rin", text: "Releases are announced in the channel." });
+  await host.as(owner, "memory.list", { memory: "rin" });
+  release();
+  const told = await pending;
+  expect(told.items.map((item) => item.text).sort()).toEqual(["Releases are announced in the channel.", "Releases go out on Fridays."]);
+  expect(told.items.every((item) => item.source.seq <= told.at)).toBe(true);
+  expect((await ask(host, undefined, { query: "releases", for: bob, at: told.at })).items).toEqual(told.items);
 });

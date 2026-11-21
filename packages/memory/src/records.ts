@@ -447,10 +447,13 @@ export const ContextItem = z.object({
 });
 export type ContextItem = z.output<typeof ContextItem>;
 
-/** A note that was relevant and did not leave, and why: it is about the owner, or holds for another project. */
+/**
+ * A note about the owner that matched and did not leave, and why. A note of another project is not named at all:
+ * a reader learns nothing of what it may not read.
+ */
 export const Withheld = z.object({
   note: NoteId,
-  reason: z.enum(["about-the-owner", "another-project"]),
+  reason: z.enum(["about-the-owner"]),
   /** For a note about the owner: the owner was asked and has not answered, or he said no. */
   status: z.enum(["asked", "refused"]).optional(),
 });
@@ -458,7 +461,7 @@ export type Withheld = z.output<typeof Withheld>;
 
 export const memoryContext = actionRef("memory.context", {
   description:
-    "Asks a memory for context: what it holds that bears on `query`, for an addressee and a purpose. Another agent is told only the conclusions with whom they are about and where they hold, never what backs them; a project's notes go to that project's agents; a note about the owner leaves only once the owner said yes, and he is asked. Every conclusion carries its source: the memory's address, the note and the position of the journal; give `at` to read the memory as it stood then.",
+    "Asks a memory for context: what it holds that bears on `query`, for an addressee and a purpose. Another agent is told only the conclusions with whom they are about and where they hold, never what backs them; a project's notes go to that project's agents and are not named to any other; the limit counts only the conclusions the addressee may be told; a note about the owner leaves only once the owner said yes, and he is asked. Every conclusion carries its source: the memory's address, the note and the position of the journal; give `at` to read the memory as it stood then.",
   input: z.object({
     memory: MemoryName,
     query: z.string().min(1).max(500),
