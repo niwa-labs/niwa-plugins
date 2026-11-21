@@ -46,6 +46,7 @@ import {
   forgePrRead,
   forgePrRetarget,
   forgeRepoList,
+  forgeRepoSync,
   forgeRepoUnwatch,
   forgeRepoWatch,
 } from "./actions.ts";
@@ -53,17 +54,21 @@ import { ForgeError } from "./gitlab.ts";
 import type { FetchLike, GitLab } from "./gitlab.ts";
 import { cancelMerge, checkMerge, merge, pendingMerges } from "./merge.ts";
 import { checksOf, kindOf, pipelineOf, pullRequestOf, runStateOf } from "./normalize.ts";
+import { DEFAULT_INTERVALS, Poller, sync } from "./observe.ts";
+import type { PollIntervals } from "./observe.ts";
 import type { GitLabJob, GitLabMr, GitLabPipeline } from "./normalize.ts";
 import { FORGE_TYPES, MergeArmed, MergeDisarmed, RepoUnwatched, RepoWatched } from "./record-types.ts";
 import type { Pipeline, Repo } from "./record-types.ts";
 import { resolveSecret } from "./secrets.ts";
-import { Servers, projectPath, repoKey, watchedRepos } from "./servers.ts";
+import { Servers, projectPath, repoKey, watchedRepos, watching } from "./servers.ts";
 import type { ForgeServer } from "./servers.ts";
 
 export * from "./records.ts";
 export { ForgeError } from "./gitlab.ts";
 export type { FetchLike, ForgeErrorCode } from "./gitlab.ts";
 export type { ForgeServer } from "./servers.ts";
+export { DEFAULT_INTERVALS, Poller, pollInterval } from "./observe.ts";
+export type { PollIntervals } from "./observe.ts";
 
 /** What the forge module is given. */
 export interface ForgeOptions {
@@ -73,6 +78,12 @@ export interface ForgeOptions {
   readonly fetch?: FetchLike;
   /** Where `NIWA_SECRET_<name>` is read. Default: the environment of the host's process. */
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /**
+   * How the watched repositories are polled: `false` polls them only when `forge.repo.sync` asks.
+   * Default: every 20 seconds while a run reads one, every 2 minutes after a change, every 5 after an
+   * hour of quiet.
+   */
+  readonly poll?: Partial<PollIntervals> | false;
 }
 
 /** The most bytes of a job log a read answers by default. */
@@ -94,7 +105,59 @@ export function forge(options: ForgeOptions): Plugin {
     const journal = (): JournalReader | undefined => api.journal?.();
     const servers = new Servers(options.servers, { home: () => api.home(), now: () => Date.now(), fetch: fetchOf, env });
     const gitlab = (host: string): GitLab => servers.client(host);
-    const repoOf = (name: { host: string; path: string }) => servers.repo(name, journal());
+    const intervals: PollIntervals = options.poll === false ? DEFAULT_INTERVALS : { ...DEFAULT_INTERVALS, ...options.poll };
+    const poller = new Poller(intervals);
+    /** The repository of a name; a caller that reads it is waited on, so it is polled more often. */
+    const repoOf = (name: { host: string; path: string }) => {
+      poller.touch(repoKey(name), Date.now());
+      return servers.repo(name, journal());
+    };
+    /** One pass over a watched repository at a time, so a version is never claimed twice. */
+    const passes = new Map<string, Promise<number>>();
+    const pass = (key: string): Promise<number> => {
+      const watched = watching(journal()).get(key);
+      const reader = journal();
+      if (watched === undefined || reader === undefined) return Promise.reject(new ForgeError("not-watched", `${key} is not watched`));
+      const before = passes.get(key) ?? Promise.resolve(0);
+      const next = before
+        .catch(() => 0)
+        .then(() => {
+          const now = journal();
+          if (now === undefined) throw new ForgeError("not-watched", "the host is not serving");
+          return sync({ gitlab: gitlab(watched.repo.host), journal: now, emit: (type, data, opts) => api.emit(type, data, opts) }, watched.repo, watched.since);
+        });
+      passes.set(key, next);
+      return next.finally(() => {
+        if (passes.get(key) === next) passes.delete(key);
+      });
+    };
+
+    if (options.poll !== false) {
+      api.service((ctx) => {
+        let stopped = false;
+        let cancel = () => {};
+        const tick = async (): Promise<void> => {
+          const now = Date.now();
+          const keys = [...watching(journal()).keys()];
+          const hostOf = (key: string) => key.slice(0, key.indexOf("/"));
+          for (const key of poller.due(keys, now, (one) => (servers.hosts().includes(hostOf(one)) ? gitlab(hostOf(one)).waitMs() : 1))) {
+            if (stopped) return;
+            const written = await pass(key).catch(() => 0);
+            poller.passed(key, Date.now(), written);
+          }
+        };
+        const step = intervals.awaited;
+        const again = () => {
+          if (stopped) return;
+          cancel = ctx.schedule(ctx.now() + step, () => tick().finally(again));
+        };
+        again();
+        return () => {
+          stopped = true;
+          cancel();
+        };
+      });
+    }
     const parentsOf = (client: GitLab, repo: Repo) => async (sha: string) => {
       try {
         return (await client.get<{ parent_ids: string[] }>(projectPath(repo, `/repository/commits/${sha}`))).parent_ids;
@@ -121,7 +184,8 @@ export function forge(options: ForgeOptions): Plugin {
           const known = watchedRepos(journal()).get(repoKey(input.repo));
           if (known !== undefined) return known;
           const repo = await servers.lookup(input.repo);
-          await ctx.emit(RepoWatched, { repo });
+          const latest = await gitlab(repo.host).get<Array<{ id: number }>>(projectPath(repo, "/events"), { sort: "desc", per_page: 1 });
+          await ctx.emit(RepoWatched, { repo, since: latest[0]?.id ?? 0 });
           return repo;
         },
       }),
@@ -148,6 +212,21 @@ export function forge(options: ForgeOptions): Plugin {
         effect: "read",
         world: "niwa",
         run: () => ({ items: [...watchedRepos(journal()).values()] }),
+      }),
+    );
+
+    api.action(
+      action(forgeRepoSync, {
+        // A pass writes each fact under an id of its own: a pass made again writes nothing twice.
+        recovery: "repeat",
+        effect: "record",
+        world: "niwa",
+        async run(input) {
+          const key = repoKey(input.repo);
+          const written = await pass(key);
+          poller.passed(key, Date.now(), written);
+          return { written };
+        },
       }),
     );
 

@@ -67,7 +67,7 @@ export async function forgeHost(opts: ForgeHostOptions = {}) {
     chmodSync(file, mode);
   }
   const { plugin: module, actions } = capturing(
-    forge({ servers: [{ host: HOST, url: server.url, token: secret("GITLAB_TOKEN") }], fetch: server.fetch, env: opts.env ?? {}, ...opts.forge }),
+    forge({ servers: [{ host: HOST, url: server.url, token: secret("GITLAB_TOKEN") }], fetch: server.fetch, env: opts.env ?? {}, poll: false, ...opts.forge }),
   );
   const niwa = createNiwa({ home: home.path });
   niwa.use(...(opts.before ?? []), module);

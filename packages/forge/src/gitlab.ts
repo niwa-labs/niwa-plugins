@@ -93,13 +93,18 @@ export class GitLab {
     return (await this.#read(this.#url(path, { ...query }))).body as T;
   }
 
-  /** Read every page of a list, up to a bound. */
-  async list<T>(path: string, query: Query = {}): Promise<T[]> {
+  /**
+   * Read every page of a list, up to a bound. With `enough`, the reading stops after the first page
+   * of which it says the rest is not needed.
+   */
+  async list<T>(path: string, query: Query = {}, enough?: (page: readonly T[]) => boolean): Promise<T[]> {
     const items: T[] = [];
     let page: string | undefined = "1";
     for (let read = 0; page !== undefined && read < MAX_PAGES; read += 1) {
       const answer: Cached = await this.#read(this.#url(path, { per_page: 100, ...query, page }));
-      items.push(...(answer.body as T[]));
+      const got = answer.body as T[];
+      items.push(...got);
+      if (enough?.(got) === true) break;
       page = answer.next;
     }
     return items;

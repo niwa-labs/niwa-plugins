@@ -35,18 +35,31 @@ export interface ServersPlace {
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
+/** A repository watched now, and the last event of its log when it was watched. */
+export interface Watched {
+  readonly repo: Repo;
+  readonly since: number;
+}
+
 /** The repositories watched now, by `<host>/<path>`, folded from the journal. */
-export function watchedRepos(journal: JournalReader | undefined): Map<string, Repo> {
-  const watched = new Map<string, Repo>();
+export function watching(journal: JournalReader | undefined): Map<string, Watched> {
+  const watched = new Map<string, Watched>();
   if (journal === undefined) return watched;
   for (const stored of journal.since(seq(0), [RepoWatched.name, RepoUnwatched.name])) {
-    const parsed = (stored.type === RepoWatched.name ? RepoWatched : RepoUnwatched).schema.safeParse(stored.data);
-    if (!parsed.success) continue;
-    const key = repoKey(parsed.data.repo);
-    if (stored.type === RepoWatched.name) watched.set(key, parsed.data.repo);
-    else watched.delete(key);
+    if (stored.type === RepoWatched.name) {
+      const parsed = RepoWatched.schema.safeParse(stored.data);
+      if (parsed.success) watched.set(repoKey(parsed.data.repo), parsed.data);
+      continue;
+    }
+    const parsed = RepoUnwatched.schema.safeParse(stored.data);
+    if (parsed.success) watched.delete(repoKey(parsed.data.repo));
   }
   return watched;
+}
+
+/** The repositories watched now, by `<host>/<path>`. */
+export function watchedRepos(journal: JournalReader | undefined): Map<string, Repo> {
+  return new Map([...watching(journal)].map(([key, one]) => [key, one.repo]));
 }
 
 /** The key of a repository: `<host>/<path>`. */

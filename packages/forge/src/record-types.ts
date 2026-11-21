@@ -206,8 +206,11 @@ export const PrMerged = record(
 /** A pull request was closed without a merge. */
 export const PrClosed = record("forge.pr.closed", z.strictObject({ pr: PrRef, by: ForgeUser.optional(), source: Source }));
 
-/** A repository is watched: the module polls it and records what it sees. */
-export const RepoWatched = record("forge.repo.watched", z.strictObject({ repo: Repo }));
+/**
+ * A repository is watched: the module polls it and records what it sees. `since` is the last event of
+ * the server's log at that moment: the events before it are history, not news.
+ */
+export const RepoWatched = record("forge.repo.watched", z.strictObject({ repo: Repo, since: z.number().int().nonnegative() }));
 
 /** A repository is not watched any more. */
 export const RepoUnwatched = record("forge.repo.unwatched", z.strictObject({ repo: Repo }));
