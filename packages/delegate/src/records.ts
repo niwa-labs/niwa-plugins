@@ -14,7 +14,7 @@ import { z } from "zod";
 
 import { JournalPosition } from "./context.ts";
 
-export { ContextAnswer, ContextRequest, JournalPosition, SourceRef, contextSource } from "./context.ts";
+export { ContextAnswer, ContextItem, ContextRequest, JournalPosition, SourceRef, contextSource } from "./context.ts";
 
 /** The id of a decision, `dec-3fa9c2`. */
 export const DecisionId = idSchema("decision");

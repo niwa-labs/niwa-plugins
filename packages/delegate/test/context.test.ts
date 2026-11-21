@@ -14,7 +14,7 @@ const memoryContext = contextSource("memory.context");
 
 const asked: ContextRequest[] = [];
 
-/** A data owner that holds one note about the owner and one about a project. */
+/** A data owner with one conclusion to tell and one note it keeps back. */
 const dataOwner = plugin("memory", (api) => {
   api.action(
     action(memoryContext, {
@@ -23,32 +23,34 @@ const dataOwner = plugin("memory", (api) => {
       world: "niwa",
       run: async (input) => {
         asked.push(input);
+        const at = input.at ?? 7;
         return {
-          sources: [{ owner: input.of, ref: "note-1a2b3c", at: input.asOf ?? 7, text: "Reviews are done in the morning.", scope: "work" }],
-          withheld: 1,
+          at,
+          items: [{ text: "Reviews are done in the morning.", source: { owner: { kind: "agent", id: input.memory }, note: "note-1a2b3c4d", seq: at } }],
+          withheld: [{ note: "note-9f8e7d6c" }],
         };
       },
     }),
   );
 });
 
-test("a data owner answers a request for context with sources that name who holds them", async () => {
+test("a data owner answers a request for context with conclusions that name who holds them", async () => {
   const home = await tempHome();
   const niwa = createNiwa({ home: home.path });
   try {
     niwa.use(dataOwner);
     await niwa.serve();
     const answer = await niwa.call(memoryContext, {
-      what: "When does the owner review code?",
-      area: "work",
-      of: { kind: "agent", id: "rin" },
+      memory: "rin",
+      query: "When does the owner review code?",
+      purpose: "judge a request for the owner",
       for: { kind: "agent", id: "judge" },
-      why: "judge a request for the owner",
-      asOf: 3,
+      at: 3,
     });
     expect(answer).toEqual({
-      sources: [{ owner: { kind: "agent", id: "rin" }, ref: "note-1a2b3c", at: 3, text: "Reviews are done in the morning.", scope: "work" }],
-      withheld: 1,
+      at: 3,
+      items: [{ text: "Reviews are done in the morning.", source: { owner: { kind: "agent", id: "rin" }, note: "note-1a2b3c4d", seq: 3 } }],
+      withheld: [{ note: "note-9f8e7d6c" }],
     });
     expect(asked.at(-1)?.for).toEqual({ kind: "agent", id: "judge" });
   } finally {
@@ -64,14 +66,9 @@ test("a request for context names its reader by address and says why", async () 
     niwa.use(dataOwner);
     await niwa.serve();
     const before = asked.length;
-    const bareReader = niwa.call(memoryContext, {
-      what: "anything",
-      of: { kind: "agent", id: "rin" },
-      for: "judge",
-      why: "judge",
-    } as never);
+    const bareReader = niwa.call(memoryContext, { memory: "rin", query: "anything", purpose: "judge", for: "judge" } as never);
     await expect(bareReader).rejects.toThrow();
-    const noPurpose = niwa.call(memoryContext, { what: "anything", of: { kind: "agent", id: "rin" }, for: { kind: "owner" } } as never);
+    const noPurpose = niwa.call(memoryContext, { memory: "rin", query: "anything", for: { kind: "owner" } } as never);
     await expect(noPurpose).rejects.toThrow();
     expect(asked.length).toBe(before);
   } finally {

@@ -43,6 +43,7 @@ import type { RequestId, RequestState } from "@niwa-labs/requests/records";
 import type { z } from "zod";
 
 import {
+  ContextAnswer,
   DELEGATE_TYPES,
   DecisionMade,
   DecisionRevoked,
@@ -53,7 +54,7 @@ import {
   delegateRecall,
   delegateRevoke,
 } from "./records.ts";
-import type { ContextRequest, DecisionId, DecisionKind, SourceRef } from "./records.ts";
+import type { ContextItem, ContextRequest, DecisionId, DecisionKind } from "./records.ts";
 
 export * from "./records.ts";
 
@@ -121,13 +122,13 @@ function same(a: Address | undefined, b: Address | undefined): boolean {
 }
 
 /** The context the data owners gave, as lines a judge reads under the question. */
-function withContext(detail: string | undefined, sources: readonly SourceRef[], withheld: number): string | undefined {
-  if (sources.length === 0 && withheld === 0) return detail;
-  const lines = sources.map((one) => {
-    const owner = "id" in one.owner ? `${one.owner.kind} ${one.owner.id}` : one.owner.kind;
-    return `- ${one.text} (${one.ref} of ${owner} at ${String(one.at)}${one.scope === undefined ? "" : `, ${one.scope}`})`;
+function withContext(detail: string | undefined, items: readonly ContextItem[], withheld: number): string | undefined {
+  if (items.length === 0 && withheld === 0) return detail;
+  const lines = items.map(({ text, source }) => {
+    const owner = "id" in source.owner ? `${source.owner.kind} ${source.owner.id}` : source.owner.kind;
+    return `- ${text} (${source.note} of ${owner} at ${String(source.seq)})`;
   });
-  if (withheld > 0) lines.push(`- ${String(withheld)} more not shown: they need the owner's leave.`);
+  if (withheld > 0) lines.push(`- ${String(withheld)} more not shown: this reader may not have them.`);
   return [detail, "Context:", ...lines].filter((line) => line !== undefined).join("\n");
 }
 
@@ -211,22 +212,24 @@ export function delegate(opts: DelegateOptions): Plugin {
     /** Ask the data owners for the context a judge needs, as the journal stood when the request was made. */
     const contextFor = async (step: Step, created: Created, judge: Address, at: Seq) => {
       const asked: ContextRequest = {
-        what: created.input.title,
-        ...(created.input.area === undefined ? {} : { area: created.input.area }),
-        of: self,
+        memory: opts.agent,
+        query: created.input.title.slice(0, 500),
+        purpose: `judge a request${created.input.area === undefined ? "" : ` about ${created.input.area}`} put to ${opts.agent} for the owner`,
         for: judge,
-        why: `judge a request put to ${opts.agent} for the owner`,
-        asOf: at,
+        at,
       };
-      const found: SourceRef[] = [];
+      const items: ContextItem[] = [];
       let withheld = 0;
       for (const source of sources) {
         const outcome = await step.outcome(source, asked);
         if (outcome.status !== "completed") continue;
-        found.push(...outcome.value.sources);
-        withheld += outcome.value.withheld;
+        // The owner of the action checked its own answer; delegate reads the part it knows.
+        const answer = ContextAnswer.safeParse(outcome.value);
+        if (!answer.success) continue;
+        items.push(...answer.data.items);
+        withheld += answer.data.withheld.length;
       }
-      return { found, withheld };
+      return { items, withheld };
     };
 
     /** Pass a request on to an address, and give back what it answers. Undefined when it ended unanswered. */
@@ -266,7 +269,7 @@ export function delegate(opts: DelegateOptions): Plugin {
         const judge = area === undefined ? undefined : judges[area];
         if (judge !== undefined) {
           const context = await contextFor(step, created, judge, at.seq);
-          const input = { ...created.input, detail: withContext(created.input.detail, context.found, context.withheld) } as Question;
+          const input = { ...created.input, detail: withContext(created.input.detail, context.items, context.withheld) } as Question;
           const deadline = (await step.now({ key: "judge-asked" })) + judgeWait;
           const judged = await passOn(step, created, judge, input, "judge", deadline);
           if (judged !== undefined && "answer" in judged) {

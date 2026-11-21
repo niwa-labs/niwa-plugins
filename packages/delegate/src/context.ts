@@ -1,10 +1,12 @@
 /**
- * The request for context: what delegate asks a data owner, and what comes back.
+ * The request for context: what delegate asks a data owner, and what it reads of the answer.
  *
- * Delegate never reads another plugin's data itself. It says what it needs, for whom and why; the
- * plugin that owns the data answers with sources, each naming who holds it and where in the journal
- * it was read. A memory serves this request as an action of its own name, built from
- * `contextSource(name)`, and imports nothing but this entry.
+ * Delegate never reads another plugin's data itself. It says what it needs, of whose memory, for whom
+ * and why; the plugin that owns the data answers with conclusions, each with its source: the address
+ * of the memory that holds it, the note, and the journal position it stood at. A memory serves this as
+ * `memory.context`; delegate knows the action only by the name its composition gives, and the types
+ * here are the part of that action it sends and reads. A memory imports them from this entry to keep
+ * the two in step.
  */
 
 import { Address, actionRef } from "@niwa-labs/core";
@@ -16,42 +18,42 @@ export const JournalPosition = z.number().int().nonnegative();
 export type JournalPosition = z.infer<typeof JournalPosition>;
 
 /** What a caller asks a data owner for. */
-export const ContextRequest = z.strictObject({
+export const ContextRequest = z.object({
+  /** Whose memory is read: the name of the agent it belongs to. */
+  memory: z.string().min(1),
   /** What is needed, in a sentence: the question to be answered. */
-  what: z.string().min(1),
-  /** The area the question is about, when it names one. */
-  area: z.string().min(1).optional(),
-  /** Whose data is asked: the agent whose memory is read. */
-  of: Address,
-  /** Who reads what comes back. A source that may not reach this address is withheld. */
-  for: Address,
+  query: z.string().min(1).max(500),
   /** Why it is needed: what the reader will do with it. */
-  why: z.string().min(1),
+  purpose: z.string().min(1).max(500),
+  /** Who reads what comes back. A conclusion that may not reach this address is withheld. */
+  for: Address,
   /** Read the data as it stood at this position, so a later judgement of an old question sees the old data. */
-  asOf: JournalPosition.optional(),
+  at: JournalPosition.optional(),
 });
 export type ContextRequest = z.infer<typeof ContextRequest>;
 
-/** One piece of context, with where it comes from. */
-export const SourceRef = z.strictObject({
-  /** Who holds the data: the address the source belongs to. */
+/** Where a conclusion comes from: who holds the data, the note, and the journal position it stood at. */
+export const SourceRef = z.object({
   owner: Address,
-  /** The id of the source inside the owner's data: a note, a page, a record. */
-  ref: z.string().min(1),
-  /** Where in the journal the source stood when it was read. */
-  at: JournalPosition,
-  /** What may be passed on: the conclusion, not necessarily the source's own text. */
-  text: z.string().min(1),
-  /** Where the conclusion holds: an area or a project. Absent when it holds everywhere. */
-  scope: z.string().min(1).optional(),
+  note: z.string().min(1),
+  seq: JournalPosition,
 });
 export type SourceRef = z.infer<typeof SourceRef>;
 
-/** What a data owner answers. */
-export const ContextAnswer = z.strictObject({
-  sources: z.array(SourceRef),
-  /** How many sources were found and not passed on, because the reader may not have them without the owner's answer. */
-  withheld: z.number().int().nonnegative(),
+/** One conclusion the data owner lets the reader have. */
+export const ContextItem = z.object({
+  text: z.string(),
+  source: SourceRef,
+});
+export type ContextItem = z.infer<typeof ContextItem>;
+
+/** What a data owner answers, as far as delegate reads it. */
+export const ContextAnswer = z.object({
+  /** The position the answer was read at. */
+  at: JournalPosition,
+  items: z.array(ContextItem),
+  /** What bore on the question and was not let out to this reader. */
+  withheld: z.array(z.object({ note: z.string().min(1) })),
 });
 export type ContextAnswer = z.infer<typeof ContextAnswer>;
 
@@ -59,7 +61,7 @@ export type ContextAnswer = z.infer<typeof ContextAnswer>;
 export function contextSource(name: string): ActionRef<ContextRequest, ContextAnswer> {
   return actionRef(name, {
     description:
-      "Answers a request for context: what is needed, whose data is read, who will read the answer and why. Returns the sources that may reach that reader, each with the address that holds it and the journal position it was read at, and how many were withheld.",
+      "Answers a request for context: what is needed, of whose memory, for whom and why. Returns the conclusions that may reach that reader, each with its source (the memory's address, the note and the journal position), and what was withheld.",
     input: ContextRequest,
     output: ContextAnswer,
   });

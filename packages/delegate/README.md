@@ -20,7 +20,8 @@ Whatever was passed on for a request is withdrawn when the request is over witho
 owner cancels a forward, the request is cancelled.
 
 Delegate does not import memory. Before a judge is asked it sends each action named in `context`
-a request for context (`ContextRequest`: what, of whom, for whom, why, as of which position); the
-answer lists sources with the address that holds each and the position it was read at. The types
-and `contextSource(name)` are in `@niwa-labs/delegate/records`, which a data owner imports to serve
-the request under its own name.
+(a memory serves `memory.context`) a request for context: whose memory, what is needed, for whom
+and why, read as of the request's position. It reads back the conclusions with their sources (the
+memory's address, the note and the journal position) and how many were withheld. The types and
+`contextSource(name)` are in `@niwa-labs/delegate/records`, which a memory may import to keep its
+action in step with them.

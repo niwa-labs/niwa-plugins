@@ -48,7 +48,7 @@ function choice(title: string, area?: string): Question {
 
 const memoryContext = contextSource("memory.context");
 const contextAsked: ContextRequest[] = [];
-/** A memory as delegate sees it: it answers a request for context with one source. */
+/** A memory as delegate sees it: it answers a request for context with one conclusion and keeps two back. */
 const memory = plugin("memory", (api) => {
   api.action(
     action(memoryContext, {
@@ -57,7 +57,12 @@ const memory = plugin("memory", (api) => {
       world: "niwa",
       run: async (input) => {
         contextAsked.push(input);
-        return { sources: [{ owner: input.of, ref: "note-5e1f0a", at: input.asOf ?? 0, text: "The owner indents Go with tabs.", scope: "style" }], withheld: 2 };
+        const at = input.at ?? 0;
+        return {
+          at,
+          items: [{ text: "The owner indents Go with tabs.", source: { owner: { kind: "agent", id: input.memory }, note: "note-5e1f0a2b", seq: at } }],
+          withheld: [{ note: "note-00000001" }, { note: "note-00000002" }],
+        };
       },
     }),
   );
@@ -299,11 +304,11 @@ test("a request of an area with a judge goes to the judge, with the context the 
   const [judged] = await w.to(JUDGE);
   expect(judged?.from).toEqual(RIN);
   expect(judged?.input.detail).toContain("The owner indents Go with tabs.");
-  expect(judged?.input.detail).toContain("note-5e1f0a");
+  expect(judged?.input.detail).toContain("note-5e1f0a2b of agent rin");
   expect(judged?.input.detail).toContain("2 more");
   const created = (await w.records("request.created")).find((row) => (row.data as { id: string }).id === asked);
   expect(contextAsked.slice(before)).toEqual([
-    expect.objectContaining({ of: RIN, for: JUDGE, area: "style", asOf: created?.seq, what: "Tabs or spaces?" }),
+    expect.objectContaining({ memory: "rin", for: JUDGE, at: created?.seq, query: "Tabs or spaces?", purpose: expect.stringContaining("style") }),
   ]);
   expect(await w.to({ kind: "owner" })).toHaveLength(0);
 
