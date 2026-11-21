@@ -194,6 +194,7 @@ const OTHER_REPOS_GRAPH: Record<string, PackageSpec> = {
     "@niwa-labs/agent": RECORDS,
     "@niwa-labs/requests": RECORDS,
     "@niwa-labs/tasks": RECORDS,
+    "@niwa-labs/timer": RECORDS,
     ...SCRIPT_TYPES,
   }),
   "@niwa-labs/delegate": extraPlugin({
