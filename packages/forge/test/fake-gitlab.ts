@@ -294,6 +294,7 @@ export class FakeGitLab {
         if (body.description !== undefined) mr.description = body.description;
         if (body.target_branch !== undefined) mr.target_branch = body.target_branch;
         if (body.state_event === "close" && mr.state === "opened") mr.state = "closed";
+        if (body.state_event === "reopen" && mr.state === "closed") mr.state = "opened";
         mr.updated_at = this.stamp();
         return { status: 200, body: this.#mrJson(project, mr) };
       }

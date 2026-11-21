@@ -425,7 +425,13 @@ export function forge(options: ForgeOptions): Plugin {
               if (!same) throw new ForgeError("refused", `pull request ${String(open.iid)} of the branch "${input.branch}" is open: name it with number to change it`);
               return { pr: { repo, number: open.iid }, created: false, head: open.sha };
             }
-            const mr = await client.send<GitLabMr>("PUT", projectPath(repo, `/merge_requests/${String(open.iid)}`), fields);
+            if (open.state === "merged") throw new ForgeError("merged", `pull request ${String(open.iid)} is merged: there is no open pull request to ensure`);
+            if (open.state === "locked") throw new ForgeError("refused", `pull request ${String(open.iid)} is locked and cannot be changed now`);
+            const mr = await client.send<GitLabMr>("PUT", projectPath(repo, `/merge_requests/${String(open.iid)}`), {
+              ...fields,
+              ...(open.state === "closed" ? { state_event: "reopen" } : {}),
+            });
+            if (mr.state !== "opened") throw new ForgeError("refused", `pull request ${String(mr.iid)} is ${mr.state} after the update, not open`);
             return { pr: { repo, number: mr.iid }, created: false, head: mr.sha };
           }
           const mr = await client.send<GitLabMr>("POST", projectPath(repo, "/merge_requests"), { source_branch: input.branch, ...fields });

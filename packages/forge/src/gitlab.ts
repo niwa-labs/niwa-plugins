@@ -27,6 +27,7 @@ export type ForgeErrorCode =
   | "rate-limited"
   | "server"
   | "not-watched"
+  | "merged"
   | "wrong-ref";
 
 /**

@@ -198,7 +198,8 @@ export const forgeCommentRead = actionRef("forge.comment.read", {
 export const forgePrEnsure = actionRef("forge.pr.ensure", {
   description:
     "Make sure a pull request from `branch` into `base` is open, with this title and description: an open one of the branch " +
-    "is updated, else one is opened. Its target is the pull request named by `number`, or `pr/new` without one.",
+    "is updated, else one is opened. With `number`, that pull request is updated, and reopened if it is closed; one that is " +
+    "merged or locked is refused. Its target is the pull request named by `number`, or `pr/new` without one.",
   input: z.strictObject({
     repo: RepoName,
     number: Number_.optional(),

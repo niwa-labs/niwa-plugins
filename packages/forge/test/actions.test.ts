@@ -110,6 +110,29 @@ test("ensure opens a pull request of a branch once, finds it again, and updates 
   expect(host.billing.mrs.size).toBe(1);
 });
 
+test("ensure with a number reopens a closed pull request and updates it, so the answer is an open one", async () => {
+  const host = await served();
+  openMr(host);
+  host.billing.mrs.get(7)!.state = "closed";
+  const owner = await host.as(["forge.pr.ensure@gitlab.example.com/acme/billing/pr/7"]);
+  expect(await owner.call(forgePrEnsure, { repo: BILLING, number: 7, branch: "topic", base: "main", title: "Back again" })).toMatchObject({ created: false, pr: { number: 7 } });
+  expect(host.billing.mrs.get(7)).toMatchObject({ state: "opened", title: "Back again" });
+  expect(host.server.seen("PUT", /merge_requests\/7$/)[0]?.body).toMatchObject({ state_event: "reopen" });
+});
+
+test("ensure with a number refuses a pull request that is merged or locked, and changes nothing", async () => {
+  const host = await served();
+  openMr(host);
+  const owner = await host.as(["forge.pr.ensure@gitlab.example.com/acme/billing/pr/7"]);
+  const ensure = () => owner.call(forgePrEnsure, { repo: BILLING, number: 7, branch: "topic", base: "main", title: "Renamed" }).catch((caught: unknown) => caught) as Promise<Error>;
+  host.billing.mrs.get(7)!.state = "merged";
+  expect(await ensure()).toMatchObject({ message: expect.stringContaining("is merged") });
+  host.billing.mrs.get(7)!.state = "locked";
+  expect(await ensure()).toMatchObject({ message: expect.stringContaining("is locked") });
+  expect(host.server.requests.filter((one) => one.method === "PUT")).toHaveLength(0);
+  expect(host.billing.mrs.get(7)?.title).toBe("MR 7");
+});
+
 test("comments are read with their text from the server, and the text is the step's, not a record's", async () => {
   const host = await served();
   openMr(host);
