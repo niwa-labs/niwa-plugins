@@ -23,9 +23,12 @@ import { ForgeError } from "./gitlab.ts";
 import type { GitLab } from "./gitlab.ts";
 import { checksOf, pipelineOf, pullRequestOf, runStateOf } from "./normalize.ts";
 import type { GitLabJob, GitLabMr, GitLabPipeline } from "./normalize.ts";
+import { pendingMerges } from "./merge.ts";
 import {
   ChecksObserved,
   JobObserved,
+  MergeArmed,
+  MergeDisarmed,
   PipelineObserved,
   PrClosed,
   PrComment,
@@ -306,7 +309,31 @@ export async function sync(place: SyncPlace, repo: Repo, since = 0): Promise<num
       idOf(repo, `pr:${String(mr.iid)}:checks:v${String(version)}`),
     );
   }
+  // Merges the server took for later and dropped on its own, or that somebody called off there: an open
+  // pull request no longer armed or in the train is no longer pending.
+  for (const one of pendingMerges(place.journal)) {
+    if (one.pr.repo.host !== repo.host || one.pr.repo.projectId !== repo.projectId) continue;
+    const mr = await mrOf(one.pr.number);
+    if (mr?.state !== "opened") continue;
+    const dropped = one.mode === "auto-merge" ? mr.merge_when_pipeline_succeeds !== true : !(await inTrain(gitlab, repo, one.pr.number));
+    if (!dropped) continue;
+    const armings = place.journal
+      .since(seq(0), [MergeArmed.name])
+      .filter((stored) => MergeArmed.schema.safeParse(stored.data).data?.externalId === one.externalId).length;
+    await write(MergeDisarmed, { pr: one.pr, externalId: one.externalId }, idOf(repo, `pr:${String(one.pr.number)}:disarmed:${String(armings)}`));
+  }
   return written;
+}
+
+/** Whether a pull request has a place in the merge train. */
+async function inTrain(gitlab: GitLab, repo: Repo, number: number): Promise<boolean> {
+  try {
+    await gitlab.get(projectPath(repo, `/merge_trains/merge_requests/${String(number)}`));
+    return true;
+  } catch (error) {
+    if (error instanceof ForgeError && error.code === "not-found") return false;
+    throw error;
+  }
 }
 
 /** How long to wait between two passes over a repository. */

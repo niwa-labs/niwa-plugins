@@ -191,3 +191,27 @@ test("with polling on, the module polls a watched repository by itself", async (
   while ((await host.records([Pushed.name])).length === 0 && Date.now() < deadline) await sleep(20);
   expect(await dataOf(host, Pushed.name)).toEqual([expect.objectContaining({ ref: "topic", after: sha("topic-1") })]);
 });
+
+test("an automatic merge called off on the server is no longer pending after the next poll", async () => {
+  const host = await watched();
+  openMr(host);
+  await host.niwa.call(forgePrMerge, { repo: BILLING, number: 7, expectHead: sha("topic-1"), method: "merge", when: "pipeline" });
+  await syncNow(host);
+  expect((await host.niwa.call(forgePrMergePending, {})).items).toHaveLength(1);
+  host.billing.mrs.get(7)!.merge_when_pipeline_succeeds = false;
+  await syncNow(host);
+  await syncNow(host);
+  expect((await host.niwa.call(forgePrMergePending, {})).items).toEqual([]);
+  expect(await host.records(["forge.pr.merge.disarmed"])).toHaveLength(1);
+});
+
+test("a merge train that dropped a pull request is no longer pending after the next poll", async () => {
+  const host = await watched();
+  openMr(host);
+  await host.niwa.call(forgePrMerge, { repo: BILLING, number: 7, expectHead: sha("topic-1"), method: "merge", when: "train" });
+  await syncNow(host);
+  expect((await host.niwa.call(forgePrMergePending, {})).items).toHaveLength(1);
+  host.billing.mrs.get(7)!.in_train = false;
+  await syncNow(host);
+  expect((await host.niwa.call(forgePrMergePending, {})).items).toEqual([]);
+});
