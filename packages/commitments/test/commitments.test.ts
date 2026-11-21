@@ -50,8 +50,14 @@ function agentsStub(told: Told[]) {
 /** A record the owner writes himself: a sentence of his, as a message would be. */
 const Said = record("test.said", z.object({ text: z.string() }));
 const say = actionRef("test.say", { description: "Write a sentence.", input: z.object({ text: z.string() }), output: z.object({ record: z.string() }) });
+/** A turn some plugin says the owner wrote, as the agents plugin does for his messages. */
+const Turn = record("test.turn", z.object({ author: z.object({ kind: z.string() }).loose(), text: z.string() }));
+/** A record of the owner's that says nothing in words. */
+const Nod = record("test.nod", z.object({}));
+const nod = actionRef("test.nod", { description: "Nod.", input: z.object({}), output: z.object({ record: z.string() }) });
 const words = plugin("words", (api) => {
-  api.declare(Said);
+  api.declare(Said, Turn, Nod);
+  api.action(action(nod, { recovery: "repeat", effect: "record", world: "niwa", run: async (_input, ctx) => ({ record: String((await ctx.emit(Nod, {})).id) }) }));
   api.action(
     action(say, {
       recovery: "repeat",
@@ -96,7 +102,7 @@ async function world(extra: readonly Plugin[] = []): Promise<World> {
   await host.serve();
   const owner = await connectAsOwner(home.path);
   cleanups.push(() => owner.close());
-  const token = host.issueToken(principalOf("session", "rin"), { grant: grant(["commitment.*", "test.say"]) });
+  const token = host.issueToken(principalOf("session", "rin"), { grant: grant(["commitment.*", "test.say", "emit:test.turn"]) });
   const rin = await connect({ home: home.path, id: "session:rin", token });
   cleanups.push(() => rin.close());
   const records = async (type: string) => (await host.records.read()).filter((row) => row.type === type);
@@ -205,6 +211,23 @@ test("a promise for the owner stands on a record of his words, and not on someon
   await expect(forged).rejects.toThrow(/owner/);
   const missing = w.rin.call(commitmentMake, { text: "Sell the car", to: "rin", party: "owner", basis: { kind: "owner-words", record: "nowhere" } });
   await expect(missing).rejects.toThrow(/owner/);
+  expect(await w.records("commitment.made")).toHaveLength(1);
+});
+
+test("a record counts as the owner's words only when he wrote it, or a plugin says he did, and it has words", async () => {
+  const w = await world();
+  const relayed = await w.host.emit(Turn, { author: { kind: "owner" }, text: "Remind me to renew the domain" });
+  const made = await w.rin.call(commitmentMake, { text: "Renew the domain", to: "rin", party: "owner", basis: { kind: "owner-words", record: String(relayed.id) } });
+  expect(made.status).toBe("open");
+
+  // A client that may write the record itself is its author, whatever the record says.
+  const claimed = await w.rin.emit(Turn, { author: { kind: "owner" }, text: "Remind me to buy a boat" });
+  const forged = w.rin.call(commitmentMake, { text: "Buy a boat", to: "rin", party: "owner", basis: { kind: "owner-words", record: String(claimed.id) } });
+  await expect(forged).rejects.toThrow(/owner/);
+
+  const nodded = await w.owner.call(nod, {});
+  const wordless = w.rin.call(commitmentMake, { text: "Sell the boat", to: "rin", party: "owner", basis: { kind: "owner-words", record: nodded.record } });
+  await expect(wordless).rejects.toThrow(/owner/);
   expect(await w.records("commitment.made")).toHaveLength(1);
 });
 

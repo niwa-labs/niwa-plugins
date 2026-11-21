@@ -156,12 +156,16 @@ function sleepKeyOf(id: string, which: "due" | "grace"): string {
 }
 const SLEEP_KEY = /^commitment:(com-[0-9a-f]+):(due|grace)$/;
 
-/** Whether a record is the owner's own word: he wrote it, or the plugin that wrote it says he is its author. */
+/**
+ * Whether a record is the owner's own words: it has words, and he wrote it, or the plugin that wrote it
+ * says he is its author. What a client wrote names its author by the client alone: a client that may
+ * write a record could write any author into it.
+ */
 function isOwnersWord(row: StoredRecord | undefined): boolean {
-  if (row === undefined) return false;
-  if (row.actor.kind === "client" && row.actor.principal?.kind === "owner") return true;
-  const data = row.data as { from?: { kind?: unknown }; author?: { kind?: unknown } } | null;
-  return data?.from?.kind === "owner" || data?.author?.kind === "owner";
+  const data = row?.data as { text?: unknown; from?: { kind?: unknown }; author?: { kind?: unknown } } | null | undefined;
+  if (row === undefined || typeof data?.text !== "string" || data.text.trim().length === 0) return false;
+  if (row.actor.kind === "client") return row.actor.principal?.kind === "owner";
+  return data.from?.kind === "owner" || data.author?.kind === "owner";
 }
 
 /** When a moment is, as a person reads it. */
