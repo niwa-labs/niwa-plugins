@@ -153,3 +153,26 @@ test("a check after an automatic merge the call recorded itself writes no second
   expect(await check(host, await lastOperation(host))).toMatchObject({ status: "completed", value: { outcome: "armed" } });
   expect(await host.records(["forge.pr.merge.armed"])).toHaveLength(1);
 });
+
+test("a cancel the server answers without calling anything off leaves the merge pending", async () => {
+  const host = await served();
+  await host.niwa.call(forgePrMerge, { ...ask, when: "pipeline" });
+  host.server.queue("POST", /cancel_merge_when_pipeline_succeeds$/, 201, { status: "error", message: "Merge train rate limit" });
+  expect(await host.niwa.call(forgePrMergeCancel, { repo: BILLING, number: 7 })).toEqual({ cancelled: false });
+  expect(host.billing.mrs.get(7)?.merge_when_pipeline_succeeds).toBe(true);
+  expect((await host.niwa.call(forgePrMergePending, {})).items).toHaveLength(1);
+  expect(await host.records(["forge.pr.merge.disarmed"])).toEqual([]);
+  expect(await host.niwa.call(forgePrMergeCancel, { repo: BILLING, number: 7 })).toEqual({ cancelled: true });
+  expect((await host.niwa.call(forgePrMergePending, {})).items).toEqual([]);
+});
+
+test("a cancel that finds the pull request merged does not say the merge was called off", async () => {
+  const host = await served();
+  await host.niwa.call(forgePrMerge, { ...ask, when: "pipeline" });
+  const mr = host.billing.mrs.get(7)!;
+  host.server.queue("POST", /cancel_merge_when_pipeline_succeeds$/, 406, { message: "406 Not Acceptable" });
+  host.server.queue("DELETE", /merge_trains/, 404, { message: "404 Not found" });
+  Object.assign(mr, { state: "merged", merge_when_pipeline_succeeds: false, merge_commit_sha: sha("merged-meanwhile") });
+  expect(await host.niwa.call(forgePrMergeCancel, { repo: BILLING, number: 7 })).toEqual({ cancelled: false });
+  expect(await host.records(["forge.pr.merge.disarmed"])).toEqual([]);
+});

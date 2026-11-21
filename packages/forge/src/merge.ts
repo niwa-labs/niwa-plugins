@@ -145,26 +145,52 @@ export function pendingMerges(journal: JournalReader | undefined): PendingMerge[
   return [...pending.values()];
 }
 
-/** Call off a merge the server took for later: the automatic merge, or the place in the train. */
+/** Whether a pull request has a place in the merge train. */
+export async function inTrain(gitlab: GitLab, pr: PrRef): Promise<boolean> {
+  try {
+    await gitlab.get(projectPath(pr.repo, `/merge_trains/merge_requests/${String(pr.number)}`));
+    return true;
+  } catch (error) {
+    if (error instanceof ForgeError && error.code === "not-found") return false;
+    throw error;
+  }
+}
+
+/** Whether an answer to a cancel says the server did not do it: a refusal in the body of a success. */
+function refusedInBody(answer: unknown): boolean {
+  return typeof answer === "object" && answer !== null && (answer as { status?: unknown }).status === "error";
+}
+
+/**
+ * Call off a merge the server took for later: the automatic merge, or the place in the train. The
+ * answer of the cancel is not taken for the outcome, for a server may answer a success status over a
+ * refusal: the pull request is read back, and the merge is dropped from the pending ones only when it
+ * is open and neither armed nor in the train, or no longer a merge to wait for. Merged, it is not
+ * called off: the server made it.
+ */
 export async function cancelMerge(gitlab: GitLab, pr: PrRef, journal: JournalReader | undefined, emit: (data: { pr: PrRef; externalId: string }) => Promise<unknown>): Promise<boolean> {
   const externalId = externalIdOf(pr);
   const known = pendingMerges(journal).find((one) => one.externalId === externalId);
+  const mrPath = projectPath(pr.repo, `/merge_requests/${String(pr.number)}`);
   const tries: Array<() => Promise<unknown>> = [
-    () => gitlab.send("POST", projectPath(pr.repo, `/merge_requests/${String(pr.number)}/cancel_merge_when_pipeline_succeeds`)),
+    () => gitlab.send("POST", `${mrPath}/cancel_merge_when_pipeline_succeeds`),
     () => gitlab.send("DELETE", projectPath(pr.repo, `/merge_trains/merge_requests/${String(pr.number)}`)),
   ];
   if (known?.mode === "train") tries.reverse();
-  let cancelled = false;
+  let asked = false;
   for (const attempt of tries) {
     try {
-      await attempt();
-      cancelled = true;
-      break;
+      if (!refusedInBody(await attempt())) asked = true;
+      if (asked) break;
     } catch (error) {
       // Nothing to call off on this side: the other one may have it.
       if (!(error instanceof ForgeError) || (error.code !== "not-found" && error.status !== 406 && error.status !== 405)) throw error;
     }
   }
-  if (cancelled || known !== undefined) await emit({ pr, externalId });
-  return cancelled;
+  const mr = await gitlab.get<GitLabMr>(mrPath);
+  if (mr.state === "merged") return false;
+  const armed = mr.state === "opened" && (mr.merge_when_pipeline_succeeds === true || (await inTrain(gitlab, pr)));
+  if (armed) return false;
+  if (asked || known !== undefined) await emit({ pr, externalId });
+  return asked;
 }
