@@ -118,7 +118,7 @@ test("a memory consolidates by itself once enough has changed in it as digests c
   });
   await host.host.emit(AgentTurnQueued, digest("fact-000001"));
   const records = await until(host, "memory.consolidated");
-  expect(dataOf(records, "memory.consolidated")).toEqual([{ memory: "rin", merged: [], lifted: [note], dropped: [], retired: [] }]);
+  expect(dataOf(records, "memory.consolidated")).toEqual([{ operation: expect.any(String), memory: "rin", merged: [], lifted: [note], dropped: [], retired: [] }]);
   // Only one change since: the next digest does not consolidate again.
   await host.host.emit(AgentTurnQueued, digest("fact-000002"));
   await until(host, "memory.digest.taken", 2);

@@ -19,6 +19,8 @@ test("a page written again under the same operation answers the revision it wrot
   expect(dataOf(await host.records(), "memory.page.written")).toHaveLength(1);
   // Another operation is still refused for a revision that is out of date.
   await expect(host.again("memory.page.write", write, "op-page-2")).rejects.toThrow(/revision 1, not 0/);
+  await host.again("memory.page.write", { ...write, revision: 1, text: "Revised" }, "advance");
+  await expect(host.again("memory.page.write", write, "op-page-2")).rejects.toThrow(/revision 1, not 0/);
 });
 
 test("a consolidation made again answers the plan it recorded, not a new empty one", async () => {
@@ -67,4 +69,26 @@ test("a context request cut after some of its questions is made again without wr
   expect(told.withheld.map((one) => one.status)).toEqual(["asked", "asked", "asked"]);
   const wanted = dataOf(await host.records(), "memory.share.wanted") as Array<{ note: string }>;
   expect(wanted.map((one) => one.note).sort()).toEqual([...notes].sort());
+});
+
+test("a consolidation claim survives reopening the journal and only its owner can finish", async () => {
+  const first = await memoryHost();
+  await expect(first.again("memory.consolidate", WHO, "first", 1)).rejects.toThrow("cut");
+  const home = await first.leave();
+  const resumed = await memoryHost({}, { home });
+  await expect(resumed.again("memory.consolidate", WHO, "second")).rejects.toThrow(/consolidation/);
+  const completed = await resumed.again("memory.consolidate", WHO, "first");
+  expect(await resumed.again("memory.consolidate", WHO, "first")).toEqual(completed);
+  expect(dataOf(await resumed.records(), "memory.consolidated")).toHaveLength(1);
+  await resumed.close();
+});
+
+test("only one page written against revision zero becomes revision one", async () => {
+  const host = await memoryHost();
+  const write = { ...WHO, page: "billing", title: "Billing", revision: 0 };
+  const results = await Promise.allSettled(["one", "two"].map(text =>
+    host.again("memory.page.write", { ...write, text }, text)));
+  expect(results.filter(one => one.status === "fulfilled")).toHaveLength(1);
+  expect(dataOf(await host.records(), "memory.page.written")).toHaveLength(1);
+  await host.close();
 });

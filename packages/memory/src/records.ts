@@ -157,9 +157,17 @@ export const PageWritten = record(
     title: z.string().min(1).max(200),
     text: PageText,
     project: Project.optional(),
+    basedOn: z.number().int().nonnegative(),
     revision: z.number().int().positive(),
     by: TurnAuthor,
   }),
+  { guard: {
+    group: "memory.page", key: data => JSON.stringify([data.memory, data.page]),
+    initial: () => 0,
+    admit: (revision, data) => data.basedOn === revision && data.revision === revision + 1
+      ? undefined : { code: "stale-page", reason: `the page ${data.page} is at revision ${revision}, not ${data.basedOn}: read it again` },
+    fold: (_revision, data) => data.revision,
+  } },
 );
 
 /** The id of a turn of an agent's inbox, as the agents module names it. */
@@ -212,6 +220,21 @@ export const ShareAnswered = record(
   }),
 );
 
+const consolidationGuard = {
+  group: "memory.consolidation",
+  key: (data: { memory: MemoryName }) => data.memory,
+  initial: (): string | null => null,
+};
+
+export const ConsolidationStarted = record("memory.consolidation.started", z.object({
+  memory: MemoryName,
+  operation: z.string().min(1),
+}), { guard: {
+  ...consolidationGuard,
+  admit: active => active === null ? undefined : { code: "busy", reason: "a consolidation is already in progress" },
+  fold: (_active, data) => data.operation,
+} });
+
 /**
  * A memory was consolidated: notes that say the same were merged into one, the notes that earned it were
  * lifted into the top layer and the weakest dropped out of a part grown too long, and notes that went
@@ -221,15 +244,21 @@ export const Consolidated = record(
   "memory.consolidated",
   z.object({
     memory: MemoryName,
+    operation: z.string().min(1),
     merged: z.array(z.object({ note: NoteId, into: NoteId })),
     lifted: z.array(NoteId),
     dropped: z.array(NoteId),
     retired: z.array(NoteId),
   }),
+  { guard: {
+    ...consolidationGuard,
+    admit: (active, data) => active === data.operation ? undefined : { code: "stale", reason: "the consolidation claim changed" },
+    fold: () => null,
+  } },
 );
 
 /** The record types the module declares. */
-export const MEMORY_TYPES = [NoteWritten, NoteCorroborated, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered, Consolidated] as const;
+export const MEMORY_TYPES = [NoteWritten, NoteCorroborated, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered, ConsolidationStarted, Consolidated] as const;
 
 /** Where a note stands. */
 export const NoteStatus = z.enum(["live", "retracted", "merged", "retired", "erased"]);

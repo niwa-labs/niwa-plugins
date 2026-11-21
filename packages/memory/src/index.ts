@@ -33,6 +33,7 @@ import type { TakenDigest } from "./fold.ts";
 import {
   MEMORY_TYPES,
   Consolidated,
+  ConsolidationStarted,
   DigestTaken,
   NoteConfirmed,
   NoteCorroborated,
@@ -432,12 +433,10 @@ export function memory(options: MemoryOptions = {}): Plugin {
           const { memory, by } = reach(ctx, input.memory);
           const done = wrote(ctx, PageWritten);
           if (done !== undefined) return { page: done.data.page, revision: done.data.revision };
-          const current = now().page(memory, input.page)?.revision ?? 0;
-          if (input.revision !== undefined && input.revision !== current) {
-            throw new MemoryRefusal("stale-page", `the page ${input.page} is at revision ${String(current)}, not ${String(input.revision)}: read it again`);
-          }
-          const revision = current + 1;
+          const basedOn = input.revision ?? now().page(memory, input.page)?.revision ?? 0;
+          const revision = basedOn + 1;
           await ctx.emit(PageWritten, {
+            basedOn,
             memory,
             page: input.page,
             title: input.title,
@@ -559,7 +558,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
     };
 
     // The digests of attached sessions reach the memory of their agent: where the digest is, not a copy.
-    api.on(SessionDigestTaken, { id: "digest-intake", from: "start" }, async (turn, step, told) => {
+    api.on(SessionDigestTaken, { id: "digest-intake", from: "start", concurrency: { by: turn => turn.agent } }, async (turn, step, told) => {
       if (turn.source?.kind !== "session-digest") return;
       const project = attachedAt(turn.agent, turn.source.session, Number(told.seq));
       await step.emit(
@@ -605,13 +604,14 @@ export function memory(options: MemoryOptions = {}): Plugin {
         world: "niwa",
         run: async (input, ctx) => {
           const { memory } = reach(ctx, input.memory);
-          const recorded = wrote(ctx, Consolidated);
-          if (recorded !== undefined) return recorded.data;
+          const recorded = wrote(ctx, Consolidated, 2);
+          if (recorded !== undefined) return memoryConsolidate.output.parse(recorded.data);
+          await ctx.emit(ConsolidationStarted, { memory, operation: ctx.operationId });
           const memories = now();
           const done = consolidate(memories.notesOf(memory), limits, clock(), (note, merged) =>
             memories.sourcesWith(memory, note.note, merged.map((one) => one.note)),
           );
-          await ctx.emit(Consolidated, { memory, ...done });
+          await ctx.emit(Consolidated, { memory, operation: ctx.operationId, ...done });
           return { memory, ...done };
         },
       }),

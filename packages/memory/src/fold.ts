@@ -5,7 +5,7 @@ import { stableJson } from "@niwa-labs/core";
 import type { Address, StoredRecord } from "@niwa-labs/core";
 import type { TurnAuthor } from "@niwa-labs/agent/records";
 
-import { Consolidated, DigestTaken, NoteConfirmed, NoteCorroborated, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageWritten, ShareAnswered, ShareWanted } from "./records.ts";
+import { ConsolidationStarted, Consolidated, DigestTaken, NoteConfirmed, NoteCorroborated, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageWritten, ShareAnswered, ShareWanted } from "./records.ts";
 import type { MemoryName, NoteId, NoteSource, NoteView, PageName, PageView } from "./records.ts";
 
 /** A record type with its schema: what the fold parses a stored record with. */
@@ -156,6 +156,7 @@ export class Memories {
       this.#consolidated(consolidated, at);
       return;
     }
+    if (stored.type === ConsolidationStarted.name) return;
     const memory = (stored.data as { memory?: unknown } | null)?.memory;
     if (typeof memory === "string" && !stored.type.startsWith("memory.share.")) this.#changes.set(memory as MemoryName, this.changesOf(memory as MemoryName) + 1);
     const written = dataAs(stored, NoteWritten);
