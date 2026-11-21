@@ -12,7 +12,7 @@
  */
 
 import { seq } from "@niwa-labs/core";
-import type { ActionContext, CheckResult, JournalReader, OperationId } from "@niwa-labs/core";
+import type { ActionContext, CheckResult, JournalReader, OperationId, RecordType } from "@niwa-labs/core";
 
 import { forgePrMergeCancel } from "./actions.ts";
 import type { MergeOutcome, PendingMerge } from "./actions.ts";
@@ -20,8 +20,8 @@ import { ForgeError } from "./gitlab.ts";
 import type { GitLab } from "./gitlab.ts";
 import { finalShaOf } from "./normalize.ts";
 import type { GitLabMr } from "./normalize.ts";
-import { MergeArmed, MergeDisarmed, MergeRequested, PrClosed, PrMerged } from "./record-types.ts";
-import type { MergeMethod, MergeWhen, PrRef } from "./record-types.ts";
+import { MergeArmed, MergeDisarmed, MergeRequested, MergeSettled, PrClosed, PrMerged } from "./record-types.ts";
+import type { MergeMethod, MergeWhen, PrRef, Repo } from "./record-types.ts";
 import { projectPath } from "./servers.ts";
 
 /** The server's own name of a merge request: `<host>/<path>!<n>`. */
@@ -130,7 +130,7 @@ export async function checkMerge(place: CheckPlace, operationId: OperationId): P
 export function pendingMerges(journal: JournalReader | undefined): PendingMerge[] {
   if (journal === undefined) return [];
   const pending = new Map<string, PendingMerge>();
-  for (const stored of journal.since(seq(0), [MergeArmed.name, MergeDisarmed.name, PrMerged.name, PrClosed.name])) {
+  for (const stored of journal.since(seq(0), [MergeArmed.name, MergeDisarmed.name, MergeSettled.name, PrMerged.name, PrClosed.name])) {
     if (stored.type === MergeArmed.name) {
       const parsed = MergeArmed.schema.safeParse(stored.data);
       if (!parsed.success) continue;
@@ -139,7 +139,8 @@ export function pendingMerges(journal: JournalReader | undefined): PendingMerge[
       pending.set(externalId, { pr, mode, externalId, expectHead, cancel: { action: forgePrMergeCancel.name, input } });
       continue;
     }
-    const parsed = (stored.type === MergeDisarmed.name ? MergeDisarmed : stored.type === PrMerged.name ? PrMerged : PrClosed).schema.safeParse(stored.data);
+    const ended = stored.type === MergeDisarmed.name ? MergeDisarmed : stored.type === MergeSettled.name ? MergeSettled : stored.type === PrMerged.name ? PrMerged : PrClosed;
+    const parsed = ended.schema.safeParse(stored.data);
     if (parsed.success) pending.delete(externalIdOf(parsed.data.pr));
   }
   return [...pending.values()];
@@ -193,4 +194,40 @@ export async function cancelMerge(gitlab: GitLab, pr: PrRef, journal: JournalRea
   if (armed) return false;
   if (asked || known !== undefined) await emit({ pr, externalId });
   return asked;
+}
+
+/** How a record is written for the merges: a record of the module's own type under an id of its own. */
+export type MergeWriter = <T>(type: RecordType<T>, data: T, id: string) => Promise<void>;
+
+/**
+ * Settle the merges listed as pending on one repository against the server, one read of each pull
+ * request: merged or closed there, it is settled; open and no longer armed or in the train, it is
+ * disarmed; open and armed, it stays pending. A pull request the server no longer has is left.
+ * Pending merges are watched for this whether or not their repository is.
+ */
+export async function settleMerges(place: { gitlab: GitLab; journal: JournalReader; write: MergeWriter }, repo: Repo): Promise<void> {
+  const { gitlab, journal } = place;
+  for (const one of pendingMerges(journal)) {
+    if (one.pr.repo.host !== repo.host || one.pr.repo.projectId !== repo.projectId) continue;
+    let mr: GitLabMr;
+    try {
+      mr = await gitlab.get<GitLabMr>(projectPath(repo, `/merge_requests/${String(one.pr.number)}`));
+    } catch (error) {
+      if (error instanceof ForgeError && error.code === "not-found") continue;
+      throw error;
+    }
+    // How many times this merge was armed: a merge armed again after being called off is a new one.
+    const armings = journal
+      .since(seq(0), [MergeArmed.name])
+      .filter((stored) => MergeArmed.schema.safeParse(stored.data).data?.externalId === one.externalId).length;
+    const id = (what: string) => `forge:${repo.host}:${String(repo.projectId)}:pr:${String(one.pr.number)}:${what}:${String(armings)}`;
+    if (mr.state === "merged" || mr.state === "closed") {
+      const mergeSha = mr.state === "merged" ? finalShaOf(mr) : undefined;
+      await place.write(MergeSettled, { pr: one.pr, externalId: one.externalId, outcome: mr.state, ...(mergeSha === undefined ? {} : { mergeSha }) }, id("settled"));
+      continue;
+    }
+    if (mr.state !== "opened") continue;
+    const dropped = one.mode === "auto-merge" ? mr.merge_when_pipeline_succeeds !== true : !(await inTrain(gitlab, one.pr));
+    if (dropped) await place.write(MergeDisarmed, { pr: one.pr, externalId: one.externalId }, id("disarmed"));
+  }
 }

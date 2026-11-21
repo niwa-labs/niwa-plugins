@@ -398,3 +398,42 @@ test("a merge train that dropped a pull request is no longer pending after the n
   await syncNow(host);
   expect((await host.niwa.call(forgePrMergePending, {})).items).toEqual([]);
 });
+
+/** A host that polls on its own, quickly, with no repository watched. */
+async function polling(): Promise<ForgeHost> {
+  const host = await forgeHost({ forge: { poll: { awaited: 20, background: 20, quiet: 20 } } });
+  hosts.push(host);
+  openMr(host);
+  return host;
+}
+
+async function settledPending(host: ForgeHost, expected: number): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while ((await host.niwa.call(forgePrMergePending, {})).items.length !== expected && Date.now() < deadline) await sleep(20);
+  expect((await host.niwa.call(forgePrMergePending, {})).items).toHaveLength(expected);
+}
+
+test("a merge armed on a repository nobody watches is no longer pending once the server merged the pull request", async () => {
+  const host = await polling();
+  await host.niwa.call(forgePrMerge, { repo: BILLING, number: 7, expectHead: sha("topic-1"), method: "merge", when: "pipeline" });
+  await settledPending(host, 1);
+  Object.assign(host.billing.mrs.get(7)!, { state: "merged", merge_when_pipeline_succeeds: false, merge_commit_sha: sha("merge-7") });
+  await settledPending(host, 0);
+  expect(await host.records(["forge.pr.merge.settled"])).toEqual([expect.objectContaining({ data: expect.objectContaining({ outcome: "merged", mergeSha: sha("merge-7") }) })]);
+  // The repository was not watched: nothing about the merge is announced to those who subscribe to merges.
+  expect(await host.records([PrMerged.name])).toEqual([]);
+});
+
+test("a merge armed on a repository nobody watches is no longer pending once it is closed or called off on the server", async () => {
+  const host = await polling();
+  await host.niwa.call(forgePrMerge, { repo: BILLING, number: 7, expectHead: sha("topic-1"), method: "merge", when: "pipeline" });
+  host.billing.mrs.get(7)!.merge_when_pipeline_succeeds = false;
+  await settledPending(host, 0);
+  expect(await host.records(["forge.pr.merge.disarmed"])).toHaveLength(1);
+
+  openMr(host, 8, "topic-8");
+  await host.niwa.call(forgePrMerge, { repo: BILLING, number: 8, expectHead: sha("topic-8"), method: "merge", when: "pipeline" });
+  Object.assign(host.billing.mrs.get(8)!, { state: "closed", merge_when_pipeline_succeeds: false });
+  await settledPending(host, 0);
+  expect(await host.records(["forge.pr.merge.settled"])).toEqual([expect.objectContaining({ data: expect.objectContaining({ outcome: "closed" }) })]);
+});

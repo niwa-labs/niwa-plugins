@@ -21,7 +21,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { action } from "@niwa-labs/core";
+import { IntegrityError, action } from "@niwa-labs/core";
 import type { JournalReader } from "@niwa-labs/core";
 import { BUILTIN_WORKFLOW, COCKPIT_MODULE, plugin } from "@niwa-labs/plugin";
 import type { Plugin } from "@niwa-labs/plugin";
@@ -59,7 +59,7 @@ import {
 import type { RepoStatus } from "./actions.ts";
 import { ForgeError } from "./gitlab.ts";
 import type { FetchLike, GitLab } from "./gitlab.ts";
-import { cancelMerge, checkMerge, merge, pendingMerges } from "./merge.ts";
+import { cancelMerge, checkMerge, merge, pendingMerges, settleMerges } from "./merge.ts";
 import { checksOf, lookupsOf, pipelineOf, pullRequestOf, runStateOf } from "./normalize.ts";
 import { DEFAULT_INTERVALS, Poller, Seen, sync } from "./observe.ts";
 import type { PollIntervals } from "./observe.ts";
@@ -195,17 +195,50 @@ export function forge(options: ForgeOptions): Plugin {
       });
     };
 
+    /** Settle the pending merges of a repository that is not watched: the server is asked, nothing else is read. */
+    const settle = async (key: string, repo: Repo | undefined): Promise<number> => {
+      const reader = journal();
+      if (repo === undefined || reader === undefined) return 0;
+      let written = 0;
+      await settleMerges(
+        {
+          gitlab: gitlab(repo.host),
+          journal: reader,
+          write: async (type, data, id) => {
+            try {
+              await api.emit(type, data, { id });
+              written += 1;
+            } catch (error) {
+              // The same id with other content: an earlier pass wrote this one already.
+              if (!(error instanceof IntegrityError)) throw error;
+            }
+          },
+        },
+        repo,
+      );
+      const at = Date.now();
+      statuses.set(key, { lastPassAt: at, lastOkAt: at });
+      return written;
+    };
+
     if (options.poll !== false) {
       api.service((ctx) => {
         let stopped = false;
         let cancel = () => {};
         const tick = async (): Promise<void> => {
           const now = Date.now();
-          const keys = [...watching(journal()).keys()];
+          const watchedNow = watching(journal());
+          // A merge armed in a repository nobody watches is still settled against the server.
+          const unwatched = new Map<string, Repo>();
+          for (const one of pendingMerges(journal())) {
+            const key = repoKey(one.pr.repo);
+            if (!watchedNow.has(key)) unwatched.set(key, one.pr.repo);
+          }
           const hostOf = (key: string) => key.slice(0, key.indexOf("/"));
-          for (const key of poller.due(keys, now, (one) => (servers.hosts().includes(hostOf(one)) ? gitlab(hostOf(one)).waitMs() : 1))) {
+          const due = poller.due([...watchedNow.keys(), ...unwatched.keys()], now, (one) => (servers.hosts().includes(hostOf(one)) ? gitlab(hostOf(one)).waitMs() : 1));
+          for (const key of due) {
             if (stopped) return;
-            const written = await pass(key).catch(() => 0);
+            const written = await (watchedNow.has(key) ? pass(key) : settle(key, unwatched.get(key))).catch(() => 0);
             poller.passed(key, Date.now(), written);
           }
         };

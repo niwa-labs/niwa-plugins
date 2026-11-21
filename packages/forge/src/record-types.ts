@@ -254,6 +254,16 @@ export const MergeDisarmed = record(
   z.strictObject({ pr: PrRef, externalId: z.string().min(1) }),
 );
 
+/**
+ * A merge the server had taken is over without niwa having seen it merged or called off: the pull
+ * request was merged or closed there. Written for the merges niwa listed as pending, whether or not
+ * the repository is watched, and so it never says `forge.pr.merged`, which is for those who watch.
+ */
+export const MergeSettled = record(
+  "forge.pr.merge.settled",
+  z.strictObject({ pr: PrRef, externalId: z.string().min(1), outcome: z.enum(["merged", "closed"]), mergeSha: Sha.optional() }),
+);
+
 /** Every record type of the forge module. */
 export const FORGE_TYPES = [
   RepoWatched,
@@ -272,4 +282,5 @@ export const FORGE_TYPES = [
   MergeRequested,
   MergeArmed,
   MergeDisarmed,
+  MergeSettled,
 ] as const;
