@@ -66,7 +66,8 @@ const words = plugin("words", (api) => {
 function bind(caller: Caller): Address | undefined {
   if (caller.kind !== "client") return undefined;
   if (caller.principal?.kind === "owner") return { kind: "owner" };
-  if (caller.principal?.kind === "session") return { kind: "agent", id: String(caller.principal.id) };
+  // Built id first: an address is the same address whatever order its keys come in.
+  if (caller.principal?.kind === "session") return { id: String(caller.principal.id), kind: "agent" };
   return { kind: "client", id: caller.id };
 }
 

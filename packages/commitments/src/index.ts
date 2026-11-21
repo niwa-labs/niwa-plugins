@@ -18,6 +18,7 @@ import {
   isYes,
   recordId,
   seq,
+  stableJson,
 } from "@niwa-labs/core";
 import type { ActionContext, Address, JournalReader, RecordId, Seq, Step, StoredRecord } from "@niwa-labs/core";
 import { AGENT_BRIEFING, agentNotify } from "@niwa-labs/agent/records";
@@ -144,7 +145,7 @@ function describe(text: string): EntityDescription {
 
 /** Whether two addresses are the same. */
 function same(a: Address | undefined, b: Address | undefined): boolean {
-  return a !== undefined && b !== undefined && JSON.stringify(a) === JSON.stringify(b);
+  return a !== undefined && b !== undefined && stableJson(a) === stableJson(b);
 }
 
 const OWNER: Address = { kind: "owner" };
