@@ -25,7 +25,8 @@ memory they mean. Another agent's memory is asked through
 ## Notes
 
 A note is one conclusion (`text`) with what backs it (`detail`), whom it is
-about (`owner` or `work`), the project it holds for (a directory) and its
+about (`owner` or `work`), the project it holds for (an absolute directory,
+kept in its canonical form: `/a/b/../c/` is `/a/c`) and its
 source: the owner's own word, the writer's conclusion, a session up to a
 locator, or a record. Only the owner gives a note the owner as its source;
 his confirmation or correction makes a note his word, and a correction by

@@ -21,8 +21,29 @@ export type MemoryName = z.output<typeof MemoryName>;
 export const NoteId = z.string().regex(/^note-[0-9a-f]{8,16}$/, "a note is named `note-<hex>`");
 export type NoteId = z.output<typeof NoteId>;
 
-/** The project a note holds for: the directory the project lives in, the key attached sessions carry. */
-export const Project = z.string().min(1).max(512);
+/**
+ * The directory a path names, written one way: absolute, with no `.`, `..`, doubled or trailing slash.
+ * A relative path names no directory, so it has none.
+ */
+export function canonicalDirectory(path: string): string | undefined {
+  if (!path.startsWith("/")) return undefined;
+  const parts: string[] = [];
+  for (const part of path.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return `/${parts.join("/")}`;
+}
+
+/** A directory as it is read back: already in its canonical form. */
+const Directory = z.string().min(1).max(512);
+
+/**
+ * The project a note holds for: the directory the project lives in, the key attached sessions carry. However
+ * it is spelled, it is the canonical form of the directory, so two spellings of one directory are one project.
+ */
+export const Project = Directory.refine((path) => path.startsWith("/"), "a project is an absolute directory").transform((path) => canonicalDirectory(path) ?? path);
 
 /** Whom a note is about: the owner himself, or the work. */
 export const NoteAbout = z.enum(["owner", "work"]);
@@ -217,7 +238,7 @@ export const NoteView = z.object({
   text: z.string(),
   detail: z.string().optional(),
   about: NoteAbout,
-  project: Project.optional(),
+  project: Directory.optional(),
   source: NoteSource,
   by: TurnAuthor,
   status: NoteStatus,
@@ -245,7 +266,7 @@ export const PageView = z.object({
   page: PageName,
   title: z.string(),
   text: z.string(),
-  project: Project.optional(),
+  project: Directory.optional(),
   revision: z.number().int().positive(),
   by: TurnAuthor,
   /** The position of the journal where this revision was written. */
@@ -262,7 +283,7 @@ export const SearchHit = z.object({
   title: z.string().optional(),
   text: z.string(),
   about: NoteAbout.optional(),
-  project: Project.optional(),
+  project: Directory.optional(),
   score: z.number(),
   seq: z.number().int().nonnegative(),
 });
@@ -415,7 +436,7 @@ export const ContextItem = z.object({
   note: NoteId,
   text: z.string(),
   about: NoteAbout,
-  project: Project.optional(),
+  project: Directory.optional(),
   /** What backs it: told only to the memory's own agent and to the owner. */
   detail: z.string().optional(),
   confirmed: z.boolean(),

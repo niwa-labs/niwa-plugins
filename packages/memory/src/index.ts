@@ -60,6 +60,7 @@ import {
   memorySearch,
   memoryShare,
   memoryTop,
+  canonicalDirectory,
 } from "./records.ts";
 import type { ContextItem, MemoryName, NoteId, NoteView, PageView, SearchHit, Withheld } from "./records.ts";
 import { holds, holdsFor } from "./holds.ts";
@@ -122,6 +123,11 @@ function noteIdOf(operation: string): NoteId {
 }
 
 
+
+/** The canonical form of a directory another module names, when it names one. */
+function directoryOf(path: string | undefined): string | undefined {
+  return path === undefined ? undefined : canonicalDirectory(path);
+}
 
 /** The start of a long text, cut at a word. */
 function opening(text: string, max = 280): string {
@@ -510,7 +516,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
         const parsed = AgentAttached.schema.safeParse(stored.data);
         if (parsed.success && parsed.data.agent === agent && (session === undefined || parsed.data.session === session)) cwd = parsed.data.cwd;
       }
-      return cwd;
+      return cwd === undefined ? undefined : canonicalDirectory(cwd);
     };
 
     // The digests of attached sessions reach the memory of their agent: where the digest is, not a copy.
@@ -544,7 +550,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
           const { memory } = reach(ctx, input.agent);
           // The project the agent is bound to; without one, where the session attached to it last works.
           const got = await ctx.step.outcome(agentGet, { agent: input.agent });
-          const project = (got.status === "completed" ? got.value.definition.project?.cwd : undefined) ?? attachedLast(input.agent);
+          const project = directoryOf(got.status === "completed" ? got.value.definition.project?.cwd : undefined) ?? attachedLast(input.agent);
           return { text: topLayer(now().notesOf(memory), project, limits.top).text };
         },
       }),
@@ -596,7 +602,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
           let project: string | undefined;
           if (!home && reader.kind === "agent") {
             const got = await ctx.step.outcome(agentGet, { agent: reader.id });
-            project = got.status === "completed" ? got.value.definition.project?.cwd : undefined;
+            project = directoryOf(got.status === "completed" ? got.value.definition.project?.cwd : undefined);
           }
           // What backs a note is searched only for its own readers: a match on it would tell of it.
           const candidates = memories
