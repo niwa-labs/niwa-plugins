@@ -77,8 +77,9 @@ export const delegateRecall = actionRef("delegate.recall", {
 
 export const delegateDecide = actionRef("delegate.decide", {
   description:
-    "Decides an open request put to the agent, within bounds: the area must be the area the request names, and a grant allows delegate.decide@<area>. The answer answers the request and is kept as a decision; whatever was forwarded for it is withdrawn.",
+    "Decides an open request put to the agent, within bounds: the area must be the area the request names, a grant allows delegate.decide@<area>, and the answer must be one its question takes. A request is decided once: the same answer again gives the decision back, another is refused. The answer answers the request and is kept as a decision; whatever was forwarded for it is withdrawn. A decision the request did not take, because it ended otherwise first, is revoked.",
   input: z.strictObject({
+    /** The request: its id, or a unique start or end of it among the requests put to the agent. */
     request: IdText,
     /** The area of the request: what the grant is checked against. */
     area: z.string().min(1),

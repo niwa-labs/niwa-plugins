@@ -8,9 +8,10 @@ import { action, grant, principalOf, stableJson } from "@niwa-labs/core";
 import type { Address, Caller, Question, StoredRecord } from "@niwa-labs/core";
 import { plugin } from "@niwa-labs/plugin";
 import type { Plugin } from "@niwa-labs/plugin";
-import { requestAnswer, requestAsk, requestCancel, requestGet, requestResolve } from "@niwa-labs/requests/records";
+import { RequestCreated, requestAnswer, requestAsk, requestCancel, requestGet, requestResolve } from "@niwa-labs/requests/records";
 import { baseStack, connect, connectAsOwner, createNiwa, eventually, tempHome, testClock } from "@niwa-labs/testing";
 import type { NiwaApi, TestClock } from "@niwa-labs/testing";
+import { z } from "zod";
 
 import { delegate } from "../src/index.ts";
 import { contextSource, delegateDecide, delegateDecisionList, delegateRecall, delegateRevoke } from "../src/records.ts";
@@ -60,7 +61,7 @@ const memory = plugin("memory", (api) => {
         const at = input.at ?? 0;
         return {
           at,
-          items: [{ text: "The owner indents Go with tabs.", source: { owner: { kind: "agent" as const, id: input.memory }, note: "note-5e1f0a2b", seq: at } }],
+          items: [{ text: "The owner indents Go with tabs.", project: "/work/go", source: { owner: { kind: "agent" as const, id: input.memory }, note: "note-5e1f0a2b", seq: at } }],
           withheld: [{ note: "note-00000001" }, { note: "note-00000002" }],
         };
       },
@@ -306,6 +307,7 @@ test("a request of an area with a judge goes to the judge, with the context the 
   expect(judged?.input.detail).toContain("The owner indents Go with tabs.");
   expect(judged?.input.detail).toContain("note-5e1f0a2b of agent rin");
   expect(judged?.input.detail).toContain("2 more");
+  expect(judged?.input.detail).toContain("/work/go");
   const created = (await w.records("request.created")).find((row) => (row.data as { id: string }).id === asked);
   expect(contextAsked.slice(before)).toEqual([
     expect.objectContaining({ memory: "rin", for: JUDGE, at: created?.seq, query: "Tabs or spaces?", purpose: expect.stringContaining("style") }),
@@ -315,7 +317,9 @@ test("a request of an area with a judge goes to the judge, with the context the 
   await w.owner.call(requestResolve, { id: judged?.id as never, answer: { ids: ["tabs"] } });
   await eventually(async () => (await w.status(asked)) === "answered");
   await eventually(async () => (await w.records("delegate.decided")).length === 1);
-  expect((await w.records("delegate.decided"))[0]?.data).toMatchObject({ kind: "judge", area: "style", by: JUDGE });
+  // The owner answered in the judge's place: the decision is his, not the judge's.
+  expect((await w.records("delegate.decided"))[0]?.data).toMatchObject({ kind: "owner", area: "style", by: { kind: "owner" } });
+  expect(await w.host.call(delegateRecall, { question: "style.indent" as never, input: choice("Tabs or spaces?", "style") })).toMatchObject({ found: true, answer: { ids: ["tabs"] } });
 });
 
 test("a request the judge does not answer in time goes on to the owner", async () => {
@@ -343,4 +347,207 @@ test("a judge's question is withdrawn with its request, and nothing goes on to t
   await eventually(async () => (await w.status(judged)) === "cancelled");
   await Bun.sleep(50);
   expect(await w.to({ kind: "owner" })).toHaveLength(0);
+});
+
+const hasDecision = async (w: World, kind: string) => (await w.records("delegate.decided")).some((row) => (row.data as { kind: string }).kind === kind);
+
+/** A permission question with a one-time, a standing and a refusing option. */
+function permission(title: string, area?: string): Question {
+  return {
+    kind: "permission",
+    title,
+    ...(area === undefined ? {} : { area }),
+    options: [
+      { id: "once", label: "Allow this once", flavor: "allow_once" },
+      { id: "always", label: "Always allow", flavor: "allow_always" },
+      { id: "no", label: "Refuse", flavor: "reject_once" },
+    ],
+    subject: { kind: "execute", target: "make test" },
+  } as Question;
+}
+
+test("a one-time permission answer is not recalled: the next request goes to the owner again", async () => {
+  const w = await world();
+  const question = permission("Run make test?", "shell");
+  const first = await w.ask(question);
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 1);
+  await w.owner.call(requestAnswer, { id: (await w.to({ kind: "owner" }))[0]?.id as never, answer: { ids: ["once"] } });
+  await eventually(async () => (await w.status(first)) === "answered");
+  await eventually(async () => (await w.records("delegate.decided")).length === 1);
+  expect(await w.host.call(delegateRecall, { question: "style.indent" as never, input: question })).toEqual({ found: false });
+
+  const second = await w.ask(question);
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 2);
+  expect(await w.status(second)).toBe("open");
+
+  // A standing permission is recalled, as any other decision.
+  await w.owner.call(requestAnswer, { id: (await w.to({ kind: "owner" }))[1]?.id as never, answer: { ids: ["always"] } });
+  await eventually(async () => (await w.status(second)) === "answered");
+  await eventually(async () => (await w.records("delegate.decided")).length === 2);
+  const third = await w.ask(question);
+  await eventually(async () => (await w.status(third)) === "answered");
+  expect(await w.to({ kind: "owner" })).toHaveLength(2);
+});
+
+test("a refusal for this time only is not recalled either", async () => {
+  const w = await world();
+  const question = permission("Run make test?", "shell");
+  await w.ask(question);
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 1);
+  await w.owner.call(requestAnswer, { id: (await w.to({ kind: "owner" }))[0]?.id as never, answer: { ids: ["no"] } });
+  await eventually(async () => (await w.records("delegate.decided")).length === 1);
+  await w.ask(question);
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 2);
+});
+
+test("an answer the request's question does not take is refused and nothing is decided", async () => {
+  const w = await world();
+  const asked = await w.ask(choice("Tabs or spaces?", "style"));
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 1);
+  const rin = await w.session("rin", ["delegate.decide@style"]);
+  await expect(rin.call(delegateDecide, { request: asked as never, area: "style", answer: { text: "either" } })).rejects.toThrow(/not valid|not answered/);
+  await expect(rin.call(delegateDecide, { request: asked as never, area: "style", answer: { ids: ["elastic"] } })).rejects.toThrow();
+  expect(await w.records("delegate.decided")).toHaveLength(0);
+  expect(await w.status(asked)).toBe("open");
+});
+
+/** A plugin that holds the answer of the agent's decisions where it reaches the request. */
+function holdDecided(): { hold: Plugin; release: () => void } {
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const hold = plugin("hold-decided", (api) => {
+    api.adjust(requestResolve, async (input) => {
+      if (input.info?.how === "decided") await held;
+      return input;
+    });
+  });
+  return { hold, release };
+}
+
+test("a request is decided once: a competing answer is refused and the same one gives the first decision back", async () => {
+  const { hold, release } = holdDecided();
+  const w = await world({ extra: [hold] });
+  const asked = await w.ask(choice("Tabs or spaces?", "style"));
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 1);
+  const rin = await w.session("rin", ["delegate.decide@style"]);
+  const first = await rin.call(delegateDecide, { request: asked as never, area: "style", answer: { ids: ["spaces"] } });
+  await expect(rin.call(delegateDecide, { request: asked as never, area: "style", answer: { ids: ["tabs"] } })).rejects.toThrow(/decided/);
+  const again = await rin.call(delegateDecide, { request: asked as never, area: "style", answer: { ids: ["spaces"] } });
+  expect(again.decision).toBe(first.decision);
+  expect(await w.records("delegate.decided")).toHaveLength(1);
+  release();
+  await eventually(async () => (await w.status(asked)) === "answered");
+  expect(await answerOf(w, asked)).toEqual({ ids: ["spaces"] });
+});
+
+test("a decision the request did not take is revoked, not left standing", async () => {
+  const { hold, release } = holdDecided();
+  const w = await world({ extra: [hold] });
+  const asked = await w.ask(choice("Tabs or spaces?", "style"));
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 1);
+  const rin = await w.session("rin", ["delegate.decide@style"]);
+  const decided = await rin.call(delegateDecide, { request: asked as never, area: "style", answer: { ids: ["spaces"] } });
+  await w.host.call(requestCancel, { id: asked as never, by: LEAD });
+  release();
+  await eventually(async () => (await w.records("delegate.revoked")).length === 1);
+  expect((await w.records("delegate.revoked"))[0]?.data).toMatchObject({ decision: decided.decision });
+  expect(await w.status(asked)).toBe("cancelled");
+  const listed = await w.owner.call(delegateDecisionList, {});
+  expect(listed.items).toEqual([expect.objectContaining({ id: decided.decision, revoked: true })]);
+});
+
+test("a short id of a request names it for a decision", async () => {
+  const w = await world();
+  const asked = await w.ask(choice("Tabs or spaces?", "style"));
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 1);
+  const rin = await w.session("rin", ["delegate.decide@style"]);
+  await rin.call(delegateDecide, { request: asked.slice(-6) as never, area: "style", answer: { ids: ["tabs"] } });
+  await eventually(async () => (await w.status(asked)) === "answered");
+});
+
+const STARTER: Address = { kind: "agent", id: "starter" };
+const OTHER: Address = { kind: "agent", id: "other" };
+
+/** A handler of the agent that asks rin a form of its own, whose value must also pass a refinement. */
+function formAsker(): Plugin {
+  return plugin("form-asker", (api) => {
+    api.on(RequestCreated, { id: "start", filter: { "to.kind": "agent", "to.id": "starter" } }, async (_created, step) => {
+      await step(requestAsk, {
+        to: RIN,
+        question: "size.pick" as never,
+        input: { kind: "form", title: "How many?", schema: { type: "object", properties: { n: { type: "number" } }, required: ["n"] } } as Question,
+        from: LEAD,
+        check: z.object({ n: z.number().min(0) }),
+      });
+    });
+  });
+}
+
+test("an owner's answer the original form refuses is asked for again, and the corrected one answers the request", async () => {
+  const w = await world({ extra: [formAsker()] });
+  await w.host.call(requestAsk, { to: STARTER, question: "size.start" as never, input: choice("Go?"), from: LEAD } as never);
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 1);
+  const original = (await w.to(RIN))[0]?.id ?? "";
+  await w.owner.call(requestAnswer, { id: (await w.to({ kind: "owner" }))[0]?.id as never, answer: { form: { n: -1 } } });
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 2);
+  const [, again] = await w.to({ kind: "owner" });
+  expect(again?.input.detail).toContain("not accepted");
+  expect(await w.status(original)).toBe("open");
+  await w.owner.call(requestAnswer, { id: again?.id as never, answer: { form: { n: 3 } } });
+  await eventually(async () => (await w.status(original)) === "answered");
+  expect(await answerOf(w, original)).toEqual({ form: { n: 3 } });
+});
+
+test("an owner who keeps giving an answer the form refuses ends the request", async () => {
+  const w = await world({ extra: [formAsker()] });
+  await w.host.call(requestAsk, { to: STARTER, question: "size.start" as never, input: choice("Go?"), from: LEAD } as never);
+  const original = async () => (await w.to(RIN))[0]?.id ?? "";
+  for (let round = 1; round <= 3; round++) {
+    await eventually(async () => (await w.to({ kind: "owner" })).length === round);
+    await w.owner.call(requestAnswer, { id: (await w.to({ kind: "owner" }))[round - 1]?.id as never, answer: { form: { n: -round } } });
+  }
+  await eventually(async () => (await w.status(await original())) === "cancelled");
+  expect(await w.to({ kind: "owner" })).toHaveLength(3);
+});
+
+test("a question another handler of the agent asked for the same request is not withdrawn with the forward", async () => {
+  const rival = plugin("rival", (api) => {
+    api.on(RequestCreated, { id: "rival-ask", filter: { "to.kind": "agent", "to.id": "rin" } }, async (_created, step) => {
+      await step(requestAsk, { to: OTHER, question: "style.other" as never, input: choice("Which editor?"), from: RIN });
+    });
+  });
+  const w = await world({ extra: [rival] });
+  const asked = await w.ask(choice("Tabs or spaces?", "style"));
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 1 && (await w.to(OTHER)).length === 1);
+  await w.host.call(requestCancel, { id: asked as never, by: LEAD });
+  const forward = (await w.to({ kind: "owner" }))[0]?.id ?? "";
+  await eventually(async () => (await w.status(forward)) === "cancelled");
+  await Bun.sleep(50);
+  expect(await w.status((await w.to(OTHER))[0]?.id ?? "")).toBe("open");
+});
+
+test("an area named like a property of every object goes to the owner", async () => {
+  const w = await world();
+  const asked = await w.ask(choice("Tabs or spaces?", "constructor"));
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 1);
+  expect(await w.status(asked)).toBe("open");
+});
+
+test("a title on several lines is kept as a decision", async () => {
+  const w = await world();
+  const asked = await w.ask(choice("Tabs\nor spaces in Go, whatever the editor says about it later?", "style"));
+  await eventually(async () => (await w.to({ kind: "owner" })).length === 1);
+  await w.owner.call(requestAnswer, { id: (await w.to({ kind: "owner" }))[0]?.id as never, answer: { ids: ["tabs"] } });
+  await eventually(async () => (await w.status(asked)) === "answered");
+  await eventually(async () => await hasDecision(w, "owner"));
+  expect((await w.records("delegate.decided"))[0]?.data).toMatchObject({ description: "Tabs or spaces in Go, whatever the editor says about it lat…" });
+});
+
+test("a host without the requests module does not start", async () => {
+  const home = await tempHome();
+  cleanups.push(() => home.cleanup());
+  const host = createNiwa({ home: home.path, clock: testClock(START) });
+  cleanups.push(() => host.close());
+  host.use(delegate({ agent: "rin" }));
+  await expect(host.serve()).rejects.toThrow(/request/);
 });

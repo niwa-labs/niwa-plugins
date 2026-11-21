@@ -43,6 +43,8 @@ export type SourceRef = z.infer<typeof SourceRef>;
 /** One conclusion the data owner lets the reader have. */
 export const ContextItem = z.object({
   text: z.string(),
+  /** Where it holds: the project the conclusion is about. Without one it holds everywhere. */
+  project: z.string().min(1).optional(),
   source: SourceRef,
 });
 export type ContextItem = z.infer<typeof ContextItem>;
