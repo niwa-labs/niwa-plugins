@@ -22,12 +22,13 @@ import type { TurnAuthor } from "@niwa-labs/agent/records";
 import { QuestionName, RequestAnswered, requestAsk } from "@niwa-labs/requests/records";
 
 import { release } from "./context.ts";
-import { Memories } from "./fold.ts";
+import { Memories, sourceKey } from "./fold.ts";
 import type { TakenDigest } from "./fold.ts";
 import {
   MEMORY_TYPES,
   DigestTaken,
   NoteConfirmed,
+  NoteCorroborated,
   NoteCorrected,
   NoteDropped,
   NoteErased,
@@ -57,6 +58,7 @@ import {
 import type { ContextItem, MemoryName, NoteId, NoteView, PageView, SearchHit, Withheld } from "./records.ts";
 import { holds, holdsFor } from "./holds.ts";
 import { rank } from "./search.ts";
+import { similar } from "./similar.ts";
 import { topLayer } from "./top.ts";
 
 export * from "./records.ts";
@@ -252,6 +254,17 @@ export function memory(options: MemoryOptions = {}): Plugin {
           if (input.source.kind === "owner" && by.kind !== "owner") {
             throw new MemoryRefusal("not-owner", "only the owner gives a note the owner as its source: what someone else says of him is their word");
           }
+          // The memory holds it already, in nearly the same words: it gains a source, not a copy.
+          const memories = now();
+          const held = memories
+            .notesOf(memory)
+            .find((one) => holds(one) && one.about === input.about && one.project === input.project && similar(one.text, input.text));
+          if (held !== undefined) {
+            if (!memories.counts(memory, held.note, sourceKey(input.source, by))) {
+              await ctx.emit(NoteCorroborated, { memory, note: held.note, source: input.source, by });
+            }
+            return { memory, note: held.note, corroborated: true };
+          }
           const note = noteIdOf(String(ctx.operationId));
           await ctx.emit(NoteWritten, {
             memory,
@@ -263,7 +276,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
             source: input.source,
             by,
           });
-          return { memory, note };
+          return { memory, note, corroborated: false };
         },
       }),
     );

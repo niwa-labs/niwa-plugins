@@ -1,13 +1,12 @@
 // The memories as the journal holds them: the records of the module folded, in order, into the notes of
 // every memory. A fold can stop at any position, which is how a memory is read as it stood then.
 
-import type { StoredRecord } from "@niwa-labs/core";
-
 import { stableJson } from "@niwa-labs/core";
-import type { Address } from "@niwa-labs/core";
+import type { Address, StoredRecord } from "@niwa-labs/core";
+import type { TurnAuthor } from "@niwa-labs/agent/records";
 
-import { DigestTaken, NoteConfirmed, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageWritten, ShareAnswered, ShareWanted } from "./records.ts";
-import type { MemoryName, NoteId, NoteView, PageName, PageView } from "./records.ts";
+import { DigestTaken, NoteConfirmed, NoteCorroborated, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageWritten, ShareAnswered, ShareWanted } from "./records.ts";
+import type { MemoryName, NoteId, NoteSource, NoteView, PageName, PageView } from "./records.ts";
 
 /** A record type with its schema: what the fold parses a stored record with. */
 interface Typed<T> {
@@ -32,6 +31,23 @@ export interface TakenDigest {
   readonly seq: number;
 }
 
+/**
+ * What a source counts as: a session or a record is one source whoever read it; a conclusion is one
+ * source for each writer who drew it; the owner's word is one.
+ */
+export function sourceKey(source: NoteSource, by: TurnAuthor): string {
+  switch (source.kind) {
+    case "owner":
+      return "owner";
+    case "inferred":
+      return stableJson(["inferred", by]);
+    case "session":
+      return stableJson(["session", source.session]);
+    case "record":
+      return stableJson(["record", source.record]);
+  }
+}
+
 /** Where the owner's word on a note leaving for an address stands: asked, or answered. */
 export type ShareState = "asked" | "allowed" | "refused";
 
@@ -46,11 +62,13 @@ export class Memories {
   readonly #pages = new Map<MemoryName, Map<PageName, PageView>>();
   readonly #digests = new Map<MemoryName, TakenDigest[]>();
   readonly #shares = new Map<string, ShareState>();
+  /** The sources each note counts, by memory and note. */
+  readonly #sources = new Map<string, Set<string>>();
   /** The position of the last record folded. */
   seq = 0;
 
   /** The record types a fold reads. */
-  static readonly TYPES: readonly string[] = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered].map((type) => type.name);
+  static readonly TYPES: readonly string[] = [NoteWritten, NoteCorroborated, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered].map((type) => type.name);
 
   /** The notes of one memory, in the order they were written. */
   notesOf(memory: MemoryName): NoteView[] {
@@ -98,6 +116,11 @@ export class Memories {
     }
   }
 
+  /** Whether a note already counts this source. */
+  counts(memory: MemoryName, note: NoteId, key: string): boolean {
+    return this.#sources.get(`${memory} ${note}`)?.has(key) ?? false;
+  }
+
   /** Fold one more record. Records come in the order of the journal. */
   apply(stored: StoredRecord): void {
     this.seq = Math.max(this.seq, Number(stored.seq));
@@ -108,6 +131,7 @@ export class Memories {
       this.#notes.set(written.memory, notes);
       if (notes.has(written.note)) return;
       const ownersWord = written.source.kind === "owner" && written.by.kind === "owner";
+      this.#sources.set(`${written.memory} ${written.note}`, new Set([sourceKey(written.source, written.by)]));
       notes.set(written.note, {
         memory: written.memory,
         note: written.note,
@@ -119,6 +143,7 @@ export class Memories {
         by: written.by,
         status: "live",
         confirmed: ownersWord,
+        sources: 1,
         top: false,
         pinned: false,
         revision: 1,
@@ -159,6 +184,15 @@ export class Memories {
         by: page.by,
         seq: at,
       });
+      return;
+    }
+    const corroborated = dataAs(stored, NoteCorroborated);
+    if (corroborated !== undefined) {
+      const counted = this.#sources.get(`${corroborated.memory} ${corroborated.note}`);
+      if (counted === undefined) return;
+      counted.add(sourceKey(corroborated.source, corroborated.by));
+      const ownersWord = corroborated.source.kind === "owner" && corroborated.by.kind === "owner";
+      this.#change(corroborated.memory, corroborated.note, at, (note) => ({ ...note, sources: counted.size, confirmed: note.confirmed || ownersWord }));
       return;
     }
     const confirmed = dataAs(stored, NoteConfirmed);

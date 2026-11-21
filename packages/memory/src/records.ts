@@ -70,6 +70,15 @@ export const NoteWritten = record(
   }),
 );
 
+/**
+ * A note was written again, in other words or from another source: the memory counts it as one more
+ * source of the note it holds, instead of keeping a second copy.
+ */
+export const NoteCorroborated = record(
+  "memory.note.corroborated",
+  z.object({ memory: MemoryName, note: NoteId, source: NoteSource, by: TurnAuthor }),
+);
+
 /** The owner confirmed a note: it is his word from now on, until it is changed by someone else. */
 export const NoteConfirmed = record("memory.note.confirmed", z.object({ memory: MemoryName, note: NoteId, by: Address }));
 
@@ -178,7 +187,7 @@ export const ShareAnswered = record(
 );
 
 /** The record types the module declares. */
-export const MEMORY_TYPES = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered] as const;
+export const MEMORY_TYPES = [NoteWritten, NoteCorroborated, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered] as const;
 
 /** Where a note stands. */
 export const NoteStatus = z.enum(["live", "retracted", "erased"]);
@@ -198,6 +207,8 @@ export const NoteView = z.object({
   status: NoteStatus,
   /** Whether the owner stands behind it: he wrote it as his word, confirmed it, or corrected it last. */
   confirmed: z.boolean(),
+  /** How many sources it has: the same source, or the same writer's own conclusion, counts once. */
+  sources: z.number().int().positive(),
   /** Whether it is in the top layer of its memory. */
   top: z.boolean(),
   /** Whether it was put in or out of the top layer by hand: consolidation leaves it where it is. */
@@ -247,7 +258,7 @@ const At = z.number().int().nonnegative();
 
 export const memoryNote = actionRef("memory.note", {
   description:
-    "Writes a note to a memory: one conclusion (`text`), what backs it (`detail`, kept home), whom it is about (the owner or the work), the project it holds for, and its source. An agent writes to its own memory; a source of `owner` is only the owner's to give.",
+    "Writes a note to a memory: one conclusion (`text`), what backs it (`detail`, kept home), whom it is about (the owner or the work), the project it holds for, and its source. An agent writes to its own memory; a source of `owner` is only the owner's to give. A note the memory already holds in nearly the same words gains a source instead of a copy (`corroborated`).",
   input: z.object({
     ...Named,
     text: NoteText,
@@ -256,7 +267,7 @@ export const memoryNote = actionRef("memory.note", {
     project: Project.optional(),
     source: NoteSource.default({ kind: "inferred" }),
   }),
-  output: z.object({ memory: MemoryName, note: NoteId }),
+  output: z.object({ memory: MemoryName, note: NoteId, corroborated: z.boolean() }),
 });
 
 export const memoryGet = actionRef("memory.get", {
