@@ -614,19 +614,19 @@ export function memory(options: MemoryOptions = {}): Plugin {
           const readable = stands.filter((one) => one.standing === "told").map(({ note }) => ({ text: home ? `${note.text}\n${note.detail ?? ""}` : note.text, value: note }));
           const items = rank(input.query, readable, input.limit).map(({ value }) => conclusion(value, who));
           // The notes about the owner that match are ranked apart: they do not use up the room of what may be told.
-          const private_ = stands.filter((one) => one.standing === "private").map(({ note }) => ({ text: note.text, value: note }));
-          const matched = rank(input.query, private_, input.limit).map(({ value }) => value);
+          const aboutOwner = stands.filter((one) => one.standing === "private").map(({ note }) => ({ text: note.text, value: note }));
+          const matched = rank(input.query, aboutOwner, input.limit).map(({ value }) => value);
           const withheld: Withheld[] = [];
           const asks: NoteView[] = [];
+          // An answer read again at its position asks nobody: it says only whether the owner had been asked.
+          const asking = input.at === undefined;
           for (const note of matched) {
             const share = memories.share(input.memory, note.note, note.revision, reader);
-            withheld.push({ note: note.note, reason: "about-the-owner", status: share === "refused" ? "refused" : "asked" });
-            if (share === undefined) asks.push(note);
+            const status = share === "refused" ? "refused" : share === "asked" || (share === undefined && asking) ? "asked" : "not-asked";
+            withheld.push({ note: note.note, reason: "about-the-owner", status });
+            if (share === undefined && asking) asks.push(note);
           }
-          // An answer read again at its position asks nobody.
-          if (input.at === undefined) {
-            for (const note of asks) await ctx.emit(ShareWanted, { memory: input.memory, note: note.note, revision: note.revision, for: reader, purpose: input.purpose });
-          }
+          for (const note of asks) await ctx.emit(ShareWanted, { memory: input.memory, note: note.note, revision: note.revision, for: reader, purpose: input.purpose });
           // A note erased while the answer was being written is not told.
           const erased = now();
           return { memory: agentAddress(input.memory), for: reader, at, items: items.filter((item) => erased.note(input.memory, item.note)?.status !== "erased"), withheld };

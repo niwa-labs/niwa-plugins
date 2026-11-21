@@ -173,3 +173,20 @@ test("an answer rests on one position even while the addressee's definition is a
   expect(told.items.every((item) => item.source.seq <= told.at)).toBe(true);
   expect((await ask(host, undefined, { query: "releases", for: bob, at: told.at })).items).toEqual(told.items);
 });
+
+test("'asked' is said only when the owner was asked: a read at a position asks nobody and says so", async () => {
+  const host = await served();
+  const note = await noted(host, { text: "He is on leave in May.", about: "owner" });
+  const before = await ask(host, undefined, { query: "leave", for: bob, at: Number((await host.records()).at(-1)!.seq) });
+  expect(before.withheld).toEqual([{ note, reason: "about-the-owner", status: "not-asked" }]);
+  expect(dataOf(await host.records(), "memory.share.wanted")).toEqual([]);
+
+  expect((await ask(host, bob, { query: "leave" })).withheld).toEqual([{ note, reason: "about-the-owner", status: "asked" }]);
+  expect(dataOf(await host.records(), "memory.share.wanted")).toHaveLength(1);
+  // The question exists now; read at a position before it was put, the answer still says nobody had been asked.
+  expect((await ask(host, undefined, { query: "leave", for: bob, at: before.at })).withheld).toEqual([{ note, reason: "about-the-owner", status: "not-asked" }]);
+  expect((await ask(host, undefined, { query: "leave", for: bob, at: Number((await host.records()).at(-1)!.seq) })).withheld).toEqual([
+    { note, reason: "about-the-owner", status: "asked" },
+  ]);
+  expect(dataOf(await host.records(), "memory.share.wanted")).toHaveLength(1);
+});
