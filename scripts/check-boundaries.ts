@@ -119,7 +119,14 @@ const NIWA_CORE_GRAPH: Record<string, PackageSpec> = {
     "@niwa-labs/tasks": "*",
     ...SCRIPT_TYPES,
   }),
+  // The script libraries ship with the workflow module, and a script imports the records and flow entries of tasks and
+  // history by name: a stored or boxed script finds them where it finds niwa's packages.
   "@niwa-labs/workflow": basePlugin({
+    "@niwa-labs/flow": "*",
+    "@niwa-labs/flow-code": "*",
+    "@niwa-labs/flow-eval": "*",
+    "@niwa-labs/tasks": "*",
+    "@niwa-labs/history": "*",
     "@niwa-labs/harness": "*",
     "@niwa-labs/sessions": "*",
     "@niwa-labs/git": "*",
@@ -204,19 +211,29 @@ const OTHER_REPOS_GRAPH: Record<string, PackageSpec> = {
   }),
 
   // Compositions assemble their modules, so they import factories directly.
-  "@niwa-labs/rin": leaf(
-    "composition",
-    {
-      "@niwa-labs/agent": "*",
-      "@niwa-labs/memory": "*",
-      "@niwa-labs/commitments": "*",
-      "@niwa-labs/delegate": "*",
-      "@niwa-labs/history": "*",
-      ...SCRIPT_TYPES,
-      ...ON_HOST,
-    },
-    "rin",
-  ),
+  // Rin also reads the records of the base plugins her attention follows, arms her timer, and offers
+  // her own page to the cockpit.
+  "@niwa-labs/rin": {
+    ...leaf(
+      "composition",
+      {
+        "@niwa-labs/agent": "*",
+        "@niwa-labs/memory": "*",
+        "@niwa-labs/commitments": "*",
+        "@niwa-labs/delegate": "*",
+        "@niwa-labs/history": "*",
+        "@niwa-labs/messages": RECORDS,
+        "@niwa-labs/requests": "*",
+        "@niwa-labs/workflow": RECORDS,
+        "@niwa-labs/timer": "*",
+        ...SCRIPT_TYPES,
+        ...ON_HOST,
+        ...COCKPIT_LIBS,
+      },
+      "rin",
+    ),
+    optionalEntries: [COCKPIT_ENTRY],
+  },
   "@niwa-labs/pstack": leaf(
     "composition",
     {
