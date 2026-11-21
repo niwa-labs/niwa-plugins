@@ -16,6 +16,7 @@ import { action, owner, recordTypeName, seq } from "@niwa-labs/core";
 import type { ActionContext, Address, Caller, JournalReader } from "@niwa-labs/core";
 import { plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
+import { AGENT_BRIEFING, AgentAttached, agentGet } from "@niwa-labs/agent/records";
 import type { TurnAuthor } from "@niwa-labs/agent/records";
 
 import { Memories } from "./fold.ts";
@@ -23,23 +24,31 @@ import {
   MEMORY_TYPES,
   NoteConfirmed,
   NoteCorrected,
+  NoteDropped,
   NoteErased,
+  NoteLifted,
   NoteRetracted,
   NoteWritten,
   PageWritten,
+  memoryBrief,
   memoryConfirm,
   memoryCorrect,
+  memoryDrop,
   memoryErase,
   memoryGet,
+  memoryLift,
   memoryList,
   memoryNote,
   memoryPageGet,
   memoryPageWrite,
   memoryRetract,
   memorySearch,
+  memoryTop,
 } from "./records.ts";
 import type { MemoryName, NoteId, NoteView, PageView, SearchHit } from "./records.ts";
+import { holds, holdsFor } from "./holds.ts";
 import { rank } from "./search.ts";
+import { topLayer } from "./top.ts";
 
 export * from "./records.ts";
 
@@ -51,7 +60,17 @@ export interface MemoryOptions {
    * nobody else speaks as anybody.
    */
   readonly bind?: CallerBinding;
+  /** How much a memory holds and shows. */
+  readonly limits?: Partial<MemoryLimits>;
 }
+
+/** How much a memory holds and shows. */
+export interface MemoryLimits {
+  /** The most characters the top layer of a memory shows, headings included. Default 4000, about a thousand tokens. */
+  readonly top: number;
+}
+
+export const DEFAULT_LIMITS: MemoryLimits = { top: 4_000 };
 
 /** A refusal of the memory module: a memory the caller may not reach, a note it may not change. */
 export class MemoryRefusal extends Error {
@@ -74,15 +93,7 @@ function noteIdOf(operation: string): NoteId {
   return `note-${createHash("sha256").update(operation).digest("hex").slice(0, 12)}`;
 }
 
-/** Whether a note holds now: neither taken back nor erased. */
-export function holds(note: NoteView): boolean {
-  return note.status === "live";
-}
 
-/** Whether what holds for `scope` (a project, or none for every project) holds where `project` is asked for. */
-export function holdsFor(scope: string | undefined, project: string | undefined): boolean {
-  return scope === undefined || project === undefined || scope === project;
-}
 
 /** The start of a long text, cut at a word. */
 function opening(text: string, max = 280): string {
@@ -122,6 +133,7 @@ export function searchable(notes: readonly NoteView[], pages: readonly PageView[
 /** The memory module. */
 export function memory(options: MemoryOptions = {}): Plugin {
   const bind = options.bind ?? ownerOnly;
+  const limits: MemoryLimits = { ...DEFAULT_LIMITS, ...options.limits };
 
   return plugin("memory", (api) => {
     api.declare(...MEMORY_TYPES);
@@ -357,6 +369,60 @@ export function memory(options: MemoryOptions = {}): Plugin {
           const memories = asOf(input.at);
           const found = rank(input.query, searchable(memories.notesOf(memory), memories.pagesOf(memory), input.project), input.limit);
           return { memory, hits: found.map(({ value, score }) => ({ ...value, score })) };
+        },
+      }),
+    );
+
+    /** Put a note in or out of the top layer by hand. */
+    const place = async (ctx: ActionContext, named: MemoryName | undefined, note: NoteId, top: boolean) => {
+      const { memory, by } = reach(ctx, named);
+      const found = changeable(memory, note);
+      if (found.status !== "live") throw new MemoryRefusal("no-note", `the note ${note} no longer holds`);
+      if (found.top !== top || !found.pinned) await ctx.emit(top ? NoteLifted : NoteDropped, { memory, note, by });
+      return { note, top };
+    };
+
+    api.action(
+      action(memoryLift, { recovery: "repeat", effect: "record", world: "niwa", idempotent: true, run: (input, ctx) => place(ctx, input.memory, input.note, true) }),
+    );
+    api.action(
+      action(memoryDrop, { recovery: "repeat", effect: "record", world: "niwa", idempotent: true, run: (input, ctx) => place(ctx, input.memory, input.note, false) }),
+    );
+
+    api.action(
+      action(memoryTop, {
+        recovery: "repeat",
+        effect: "read",
+        world: "niwa",
+        run: (input, ctx) => {
+          const { memory } = reach(ctx, input.memory);
+          return { memory, ...topLayer(now().notesOf(memory), input.project, limits.top) };
+        },
+      }),
+    );
+
+    /** The directory the session attached to an agent last works in. */
+    const attachedLast = (agent: string): string | undefined => {
+      let cwd: string | undefined;
+      for (const stored of journal().since(seq(0), [recordTypeName(AgentAttached.name)])) {
+        const parsed = AgentAttached.schema.safeParse(stored.data);
+        if (parsed.success && parsed.data.agent === agent) cwd = parsed.data.cwd;
+      }
+      return cwd;
+    };
+
+    api.offer(AGENT_BRIEFING, { title: "What it remembers", action: memoryBrief.name });
+    api.action(
+      action(memoryBrief, {
+        recovery: "repeat",
+        effect: "read",
+        world: "niwa",
+        run: async (input, ctx) => {
+          const { memory } = reach(ctx, input.agent);
+          // The project the agent is bound to; without one, where the session attached to it last works.
+          const got = await ctx.step.outcome(agentGet, { agent: input.agent });
+          const project = (got.status === "completed" ? got.value.definition.project?.cwd : undefined) ?? attachedLast(input.agent);
+          return { text: topLayer(now().notesOf(memory), project, limits.top).text };
         },
       }),
     );

@@ -6,7 +6,7 @@ import { action, actionName, owner } from "@niwa-labs/core";
 import type { ActionName, Address, StoredRecord } from "@niwa-labs/core";
 import { plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
-import { AGENT_TYPES, agentGet } from "@niwa-labs/agent/records";
+import { AGENT_BRIEFING, AGENT_TYPES, BriefingSectionOutput, agentBriefing, agentGet } from "@niwa-labs/agent/records";
 import type { AgentDefinitionInput } from "@niwa-labs/agent/records";
 import { baseStack, createNiwa, tempHome, testClock } from "@niwa-labs/testing";
 import type { Host, TestClock } from "@niwa-labs/testing";
@@ -15,8 +15,8 @@ import { memory } from "../../src/index.ts";
 import type { MemoryOptions } from "../../src/index.ts";
 
 /**
- * The agents module as far as the memory reads it: it declares the agents' records and answers
- * `agent.get` for the agents it is given.
+ * The agents module as far as the memory reads it: it declares the agents' records, answers `agent.get`
+ * for the agents it is given, and writes a briefing of the sections plugins offer, as the module does.
  */
 export function agentsStandIn(agents: readonly AgentDefinitionInput[] = []): Plugin {
   return plugin("agents", (api) => {
@@ -31,6 +31,22 @@ export function agentsStandIn(agents: readonly AgentDefinitionInput[] = []): Plu
           if (definition === undefined) throw new Error(`there is no agent "${agent}"`);
           const address = { kind: "agent" as const, id: agent };
           return { name: agent, address, source: "config" as const, status: "asleep" as const, definition: { hands: [], tools: "all" as const, ...definition }, queued: 0, attached: [] };
+        },
+      }),
+    );
+    api.action(
+      action(agentBriefing, {
+        recovery: "repeat",
+        effect: "read",
+        world: "niwa",
+        run: async ({ agent }, ctx) => {
+          const sections: string[] = [];
+          for (const { value } of api.offers(AGENT_BRIEFING)) {
+            const written = await ctx.step.outcome<unknown, unknown>(actionName(value.action), { agent });
+            const parsed = written.status === "completed" ? BriefingSectionOutput.safeParse(written.value) : undefined;
+            if (parsed?.success === true && parsed.data.text.trim() !== "") sections.push(`${value.title}:\n${parsed.data.text.trim()}`);
+          }
+          return { text: sections.join("\n\n") };
         },
       }),
     );

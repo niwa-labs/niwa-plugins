@@ -3,7 +3,7 @@
 
 import type { StoredRecord } from "@niwa-labs/core";
 
-import { NoteConfirmed, NoteCorrected, NoteErased, NoteRetracted, NoteWritten, PageWritten } from "./records.ts";
+import { NoteConfirmed, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageWritten } from "./records.ts";
 import type { MemoryName, NoteId, NoteView, PageName, PageView } from "./records.ts";
 
 /** A record type with its schema: what the fold parses a stored record with. */
@@ -27,7 +27,7 @@ export class Memories {
   seq = 0;
 
   /** The record types a fold reads. */
-  static readonly TYPES: readonly string[] = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, PageWritten].map((type) => type.name);
+  static readonly TYPES: readonly string[] = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten].map((type) => type.name);
 
   /** The notes of one memory, in the order they were written. */
   notesOf(memory: MemoryName): NoteView[] {
@@ -75,6 +75,8 @@ export class Memories {
         by: written.by,
         status: "live",
         confirmed: ownersWord,
+        top: false,
+        pinned: false,
         revision: 1,
         written: at,
         seq: at,
@@ -121,11 +123,21 @@ export class Memories {
       this.#change(retracted.memory, retracted.note, at, (note) => (note.status === "live" ? { ...note, status: "retracted" } : note));
       return;
     }
+    const lifted = dataAs(stored, NoteLifted);
+    if (lifted !== undefined) {
+      this.#change(lifted.memory, lifted.note, at, (note) => ({ ...note, top: true, pinned: true }));
+      return;
+    }
+    const dropped = dataAs(stored, NoteDropped);
+    if (dropped !== undefined) {
+      this.#change(dropped.memory, dropped.note, at, (note) => ({ ...note, top: false, pinned: true }));
+      return;
+    }
     const erased = dataAs(stored, NoteErased);
     if (erased !== undefined) {
       this.#change(erased.memory, erased.note, at, (note) => {
         const { detail: _dropped, ...rest } = note;
-        return { ...rest, text: "", status: "erased" };
+        return { ...rest, text: "", status: "erased", top: false };
       });
     }
   }

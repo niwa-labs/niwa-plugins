@@ -10,7 +10,7 @@
 import { z } from "zod";
 
 import { Address, actionRef, record } from "@niwa-labs/core";
-import { AgentName, SessionRefText, TurnAuthor } from "@niwa-labs/agent/records";
+import { AgentName, BriefingSectionInput, BriefingSectionOutput, SessionRefText, TurnAuthor } from "@niwa-labs/agent/records";
 
 /** Whose memory: the name of the agent it belongs to. */
 export const MemoryName = AgentName;
@@ -90,6 +90,15 @@ export const NoteRetracted = record(
  */
 export const NoteErased = record("memory.note.erased", z.object({ memory: MemoryName, note: NoteId, by: TurnAuthor }));
 
+/**
+ * A note was lifted into the top layer of its memory: what the agent is shown first, in its briefing and
+ * its prompt. A note lifted or dropped by hand stays where it was put: consolidation leaves it alone.
+ */
+export const NoteLifted = record("memory.note.lifted", z.object({ memory: MemoryName, note: NoteId, by: TurnAuthor }));
+
+/** A note was dropped from the top layer: it is no longer shown first, and still holds and is found. */
+export const NoteDropped = record("memory.note.dropped", z.object({ memory: MemoryName, note: NoteId, by: TurnAuthor }));
+
 /** The name of a page: lowercase words joined by `-`, `_`, `.` or `/`. */
 export const PageName = z.string().regex(/^[a-z0-9][a-z0-9._/-]{0,127}$/, "a page is named with lowercase letters, digits, '.', '_', '-' or '/', at most 128");
 export type PageName = z.output<typeof PageName>;
@@ -120,7 +129,7 @@ export const PageWritten = record(
 );
 
 /** The record types the module declares. */
-export const MEMORY_TYPES = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, PageWritten] as const;
+export const MEMORY_TYPES = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten] as const;
 
 /** Where a note stands. */
 export const NoteStatus = z.enum(["live", "retracted", "erased"]);
@@ -140,6 +149,10 @@ export const NoteView = z.object({
   status: NoteStatus,
   /** Whether the owner stands behind it: he wrote it as his word, confirmed it, or corrected it last. */
   confirmed: z.boolean(),
+  /** Whether it is in the top layer of its memory. */
+  top: z.boolean(),
+  /** Whether it was put in or out of the top layer by hand: consolidation leaves it where it is. */
+  pinned: z.boolean(),
   /** How many times its text was written: 1, and one more for each correction. */
   revision: z.number().int().positive(),
   /** The position of the journal where it was written, and of the last record that changed it. */
@@ -267,4 +280,32 @@ export const memorySearch = actionRef("memory.search", {
     at: At.optional(),
   }),
   output: z.object({ memory: MemoryName, hits: z.array(SearchHit) }),
+});
+
+export const memoryLift = actionRef("memory.lift", {
+  description: "Lifts a note into the top layer of its memory: it is shown first, in the agent's briefing. Consolidation will not drop it.",
+  input: z.object({ ...Named, note: NoteId }),
+  output: z.object({ note: NoteId, top: z.boolean() }),
+});
+
+export const memoryDrop = actionRef("memory.drop", {
+  description:
+    "Drops a note from the top layer: it is no longer shown first, but still holds and is found by a search. Consolidation will not lift it again.",
+  input: z.object({ ...Named, note: NoteId }),
+  output: z.object({ note: NoteId, top: z.boolean() }),
+});
+
+export const memoryTop = actionRef("memory.top", {
+  description:
+    "The top layer of a memory for a project: the notes shown first, about the owner, for the project and in general, within the size the module allows.",
+  input: z.object({ ...Named, project: Project.optional() }),
+  output: z.object({ memory: MemoryName, text: z.string(), notes: z.array(NoteId), left: z.number().int().nonnegative() }),
+});
+
+/** The section of an agent's briefing the module writes: the top layer of its memory, for its project. */
+export const memoryBrief = actionRef("memory.brief", {
+  description:
+    "The memory's section of an agent's briefing: the top layer of its memory for the project it works on (its own, or the directory of the session attached last).",
+  input: BriefingSectionInput,
+  output: BriefingSectionOutput,
 });
