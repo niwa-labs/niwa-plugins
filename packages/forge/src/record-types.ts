@@ -18,7 +18,7 @@ import { z } from "zod";
 import { ForgeHost, ProjectPath, RefName } from "./targets.ts";
 
 /** A full commit id. */
-export const Sha = z.string().regex(/^[0-9a-f]{40,64}$/, "a full commit id");
+export const Sha = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/, "a full commit id");
 export type Sha = z.infer<typeof Sha>;
 
 /** A repository the module knows: the server, the path of the project and its id, which survives a rename. */
