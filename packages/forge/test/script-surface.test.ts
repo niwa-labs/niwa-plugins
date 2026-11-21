@@ -5,7 +5,8 @@
 // A script here imports the module by the path of its entry file, not by the name of the package.
 
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { eventually, requests, timers, workflow } from "@niwa-labs/testing";
@@ -120,4 +121,23 @@ test("the check of a script holds the data of a builder's wait to the record's s
   expect((await call(host, "workflow.check", { file: await script("moved.data.head") })).errors).toEqual([]);
   const wrong = (await call(host, "workflow.check", { file: await script("moved.data.tip") })).errors as Array<{ code: string }>;
   expect(wrong.map((one) => one.code)).toEqual(["TS2339"]);
+}, 60_000);
+
+test("a stored script imports forge's flow helpers by the name of the package", async () => {
+  const host = await served();
+  // The script is written where the package is installed, as a delivery script in a repository that depends on forge is.
+  const dir = join(host.home, "by-name");
+  await mkdir(join(dir, "node_modules", "@niwa-labs"), { recursive: true });
+  await symlink(realpathSync(join(import.meta.dir, "..")), join(dir, "node_modules", "@niwa-labs", "forge"), "dir");
+  const file = join(dir, "land.ts");
+  await writeFile(
+    file,
+    [
+      'import { durationMs, land } from "@niwa-labs/forge/flow";',
+      'export default workflow({ description: "Land with the forge helpers", output: z.json() }, async () => ({ minute: durationMs("1m"), land: typeof land }));',
+    ].join("\n"),
+  );
+  const { id } = await call(host, "workflow.register", { file });
+  const { run } = await call(host, "workflow.start", { id });
+  expect(await resultOf(host, run)).toEqual({ status: "done", result: { minute: 60_000, land: "function" } });
 }, 60_000);

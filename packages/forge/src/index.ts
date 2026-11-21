@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 
 import { IntegrityError, action } from "@niwa-labs/core";
 import type { JournalReader } from "@niwa-labs/core";
-import { BUILTIN_WORKFLOW, COCKPIT_MODULE, plugin } from "@niwa-labs/plugin";
+import { BUILTIN_WORKFLOW, COCKPIT_MODULE, SCRIPT_PACKAGE, plugin } from "@niwa-labs/plugin";
 import type { Plugin } from "@niwa-labs/plugin";
 
 import {
@@ -134,6 +134,8 @@ export function forge(options: ForgeOptions): Plugin {
     api.declare(...FORGE_TYPES);
     // The page of this plugin in the cockpit: a client module, offered by the path of its source.
     api.offer(COCKPIT_MODULE, { id: "forge", entry: fileURLToPath(new URL("./cockpit/index.tsx", import.meta.url)) });
+    // A delivery script imports the flow helpers and builders by the name of this package: a stored copy finds it here.
+    api.offer(SCRIPT_PACKAGE, { name: "@niwa-labs/forge", root: fileURLToPath(new URL("..", import.meta.url)) });
     if (options.pushReaction !== undefined) {
       api.offer(BUILTIN_WORKFLOW, {
         name: "push-reaction",
