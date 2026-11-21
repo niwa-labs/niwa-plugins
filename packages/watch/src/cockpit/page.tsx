@@ -4,7 +4,7 @@ import { EntityLink, recordList, useCall, useProjection } from "@niwa-labs/cockp
 import { Badge, StateRing } from "@niwa-labs/ui-kit";
 
 import { listAction, type Reading } from "./actions.ts";
-import { KIND_LABEL, RING, STATE_LABEL, agoText, countByState, incidents, ordered, subjectName, subjectText, troubled, type Incident } from "./subjects.ts";
+import { KIND_LABEL, REFRESH_ON, RING, STATE_LABEL, agoText, countByState, incidents, ordered, subjectName, subjectText, troubled, type Incident } from "./subjects.ts";
 
 /** The flags the live feed holds: recent ones, not the whole history. */
 const FLAGS = recordList({ types: ["watch.stuck", "watch.recovered"] }, 200);
@@ -49,7 +49,7 @@ function IncidentRow({ incident, now }: { incident: Incident; now: number }) {
 }
 
 export function WatchPage() {
-  const subjects = useCall(listAction, {}, { refreshOn: { types: ["watch.*", "session.ended", "workflow.run.*", "request.*", "timer.*"] } });
+  const subjects = useCall(listAction, {}, { refreshOn: { types: REFRESH_ON.types } });
   const flags = incidents(useProjection(FLAGS));
   const now = Date.now();
   return (

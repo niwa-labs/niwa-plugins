@@ -2,8 +2,10 @@
 
 import { expect, test } from "bun:test";
 
+import { matchRecord } from "@niwa-labs/cockpit-sdk";
+
 import type { Reading, WatchState } from "../src/cockpit/actions.ts";
-import { agoText, countByState, incidents, ordered, subjectName, subjectText } from "../src/cockpit/subjects.ts";
+import { REFRESH_ON, agoText, countByState, incidents, ordered, subjectName, subjectText } from "../src/cockpit/subjects.ts";
 
 function reading(subject: string, state: WatchState, since = 0): Reading {
   return { subject, state, since, last: since };
@@ -66,4 +68,12 @@ test("a subject flagged again after it recovered is a second incident", () => {
 
 test("a recovery whose flag is not held is no incident, and a record that is no flag is ignored", () => {
   expect(incidents([recovered("run:a", "silent", 100, 400), { type: "watch.stuck", at: 1, data: { subject: "run:a" } }, { type: "watch.stuck", at: 1, data: null }])).toEqual([]);
+});
+
+test("the list is read again after a record that moves a session or a run between states, and not after its activity", () => {
+  const at = (type: string) => ({ id: "r", seq: 1, type, stream: "s", at: 0, data: {} }) as unknown as Parameters<typeof matchRecord>[1];
+  for (const type of ["watch.stuck", "watch.recovered", "session.started", "session.turn-started", "session.turn-ended", "session.ended", "workflow.run.finished", "request.created", "request.answered", "timer.slept"]) {
+    expect([type, matchRecord(REFRESH_ON, at(type))]).toEqual([type, true]);
+  }
+  expect(matchRecord(REFRESH_ON, at("session.activity"))).toBe(false);
 });

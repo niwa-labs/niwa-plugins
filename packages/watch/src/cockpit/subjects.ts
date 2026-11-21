@@ -4,6 +4,14 @@ import type { WorkState } from "@niwa-labs/ui-kit";
 
 import type { Reading, StuckKind, WatchState } from "./actions.ts";
 
+/**
+ * The records after which the list of subjects is read again: those that move a subject between states. A session's
+ * activity is left out, as it moves nothing and arrives many times a second.
+ */
+export const REFRESH_ON = {
+  types: ["watch.*", "session.started", "session.turn-started", "session.turn-ended", "session.ended", "workflow.run.*", "request.*", "timer.*"],
+} as const;
+
 /** The ring a state is drawn with: a stuck or looping subject is a failure the owner should see. */
 export const RING: Readonly<Record<WatchState, WorkState>> = {
   working: "running",
