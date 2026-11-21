@@ -67,6 +67,7 @@ const Activity = z.object({ session: SessionNamed, tool: z.string().optional(), 
 const OfRun = z.object({ run: Text });
 const Scope = z.object({ run: Text, scope: Text, shield: z.boolean().optional() });
 const OfInvocation = z.object({ invocation: Text });
+const Cancelled = z.object({ invocation: Text, except: z.array(z.string()).optional() });
 const Intent = z.object({ invocation: Text, action: z.string(), input: z.unknown() });
 const InvocationState = z.object({ invocation: Text, state: z.string() });
 const RequestMade = z.object({
@@ -107,8 +108,8 @@ interface Track {
   started: boolean;
   invocationState?: string;
   paused: boolean;
-  cancelledAt?: number;
-  shields: Set<string>;
+  /** The shielded scopes that are open, each with the moment a cancel spared it, once one has. */
+  shields: Map<string, number | undefined>;
 }
 
 /** A flag the watch wrote and has not closed. */
@@ -289,7 +290,7 @@ export class Model {
         if (!data.success) return;
         const track = this.known(runSubject(data.data.run));
         if (track === undefined) return;
-        if (data.data.shield === true) track.shields.add(data.data.scope);
+        if (data.data.shield === true && !track.shields.has(data.data.scope)) track.shields.set(data.data.scope, undefined);
         track.last = at;
         return;
       }
@@ -318,10 +319,13 @@ export class Model {
         return;
       }
       case "niwa.step.cancelled": {
-        const data = OfInvocation.safeParse(row.data);
+        const data = Cancelled.safeParse(row.data);
         const track = data.success ? this.ofInvocation(data.data.invocation) : undefined;
-        if (track === undefined) return;
-        track.cancelledAt ??= at;
+        if (track === undefined || !data.success) return;
+        // A cancel names the open shields it spares in `except`: those are the scopes that go on past it.
+        for (const scope of data.data.except ?? []) {
+          if (track.shields.has(scope) && track.shields.get(scope) === undefined) track.shields.set(scope, at);
+        }
         track.last = at;
         return;
       }
@@ -417,10 +421,9 @@ export class Model {
       ...(kind === undefined ? {} : { kind }),
     });
 
-    // A run that was cancelled and still holds a shielded scope open past the grace is not stopping.
-    if (track.cancelledAt !== undefined && track.shields.size > 0 && now - track.cancelledAt >= settings.shieldGrace) {
-      return shape("stuck", track.cancelledAt, "shielded-cancel");
-    }
+    // A run whose cancel spared a shielded scope that is still open past the grace is not stopping.
+    const spared = [...track.shields.values()].filter((at): at is number => at !== undefined && now - at >= settings.shieldGrace);
+    if (spared.length > 0) return shape("stuck", Math.min(...spared), "shielded-cancel");
 
     const held = this.heldState(track);
     if (held !== undefined) return shape(held, track.since);
@@ -454,7 +457,7 @@ export class Model {
 
   private create(subject: Subject, kind: Track["kind"], at: number): Track | undefined {
     if (this.gone.has(subject)) return undefined;
-    const track: Track = { subject, kind, base: "idle", since: at, last: at, started: kind === "session", paused: false, shields: new Set() };
+    const track: Track = { subject, kind, base: "idle", since: at, last: at, started: kind === "session", paused: false, shields: new Map() };
     this.tracks.set(subject, track);
     return track;
   }

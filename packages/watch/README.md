@@ -21,8 +21,8 @@ A subject is a session (`session:<harness> <native id>`) or a run (`run:<id>`). 
 
 - `watch.stuck { subject, since, last, kind }` — `kind` is `silent` (no sign of life for `silentAfter`; a session that
   says its own `stuckAfter` is held to that), `looping` (`loopRepeats` identical steps of a run, or `sessionLoopRepeats`
-  identical activities of a session, with no progress between them) or `shielded-cancel` (a run was cancelled and a
-  shielded scope inside it was still open `shieldGrace` later). `since` is when the condition began, `last` the moment of
+  identical activities of a session, with no progress between them) or `shielded-cancel` (a cancel spared a
+  shielded scope of the run, as its `except` says, and the scope was still open `shieldGrace` later). `since` is when the condition began, `last` the moment of
   the last sign of life.
 - `watch.recovered { subject, since, kind }` — closes the `watch.stuck` with that subject, kind and `since`: the subject
   gave a sign of life, stopped repeating itself, ended, or its shielded scope closed. Another `watch.stuck` for the

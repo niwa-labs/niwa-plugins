@@ -215,21 +215,31 @@ describe("runs", () => {
     expect(modelOf(rows).readingOf(run, 7000)?.state).toBe("looping");
   });
 
-  test("a cancelled run that still holds a shielded scope is stuck once the grace has passed, until the scope closes", () => {
-    const model = modelOf([
-      ...started(),
-      row("workflow.scope.opened", { run: "run-1", scope: "safe", onExit: "wait", shield: true }, 1000),
-      row("niwa.step.cancelled", { invocation: "inv-1", prefixes: [""], reason: "enough" }, 5000),
-    ]);
+  const shield = (scope: string, at: number) => row("workflow.scope.opened", { run: "run-1", scope, onExit: "wait", shield: true }, at);
+  const cancel = (at: number, except?: string[]) =>
+    row("niwa.step.cancelled", { invocation: "inv-1", prefixes: [""], ...(except === undefined ? {} : { except }), reason: "enough" }, at);
+
+  test("a cancel that spares a shielded scope makes the run stuck once the grace has passed, until the scope closes", () => {
+    const model = modelOf([...started(), shield("safe", 1000), cancel(5000, ["safe"])]);
     expect(model.readingOf(run, 5000 + 59_999)?.kind).toBeUndefined();
     expect(model.readingOf(run, 5000 + MINUTE)).toEqual({ subject: run, state: "stuck", kind: "shielded-cancel", since: 5000, last: 5000 });
     model.apply(row("workflow.scope.closed", { run: "run-1", scope: "safe", outcome: "done" }, 70_000));
     expect(model.readingOf(run, 80_000)?.kind).toBeUndefined();
   });
 
-  test("a cancel with no shielded scope open is not held against the run", () => {
-    const model = modelOf([...started(), row("niwa.step.cancelled", { invocation: "inv-1", prefixes: [""], reason: "enough" }, 5000)]);
-    expect(model.readingOf(run, 5000 + 5 * MINUTE)?.kind).toBeUndefined();
+  test("a cancel that spares nothing is not held against the run, even when a shield opens long after it", () => {
+    const model = modelOf([...started(), cancel(5000), shield("late", 10 * MINUTE)]);
+    expect(model.readingOf(run, 15 * MINUTE)).toMatchObject({ state: "working", last: 10 * MINUTE });
+  });
+
+  test("only the shields a cancel spared are blamed, each from its own cancel", () => {
+    const model = modelOf([...started(), shield("a", 1000), cancel(5000, ["a"]), shield("b", 6000), cancel(10_000, ["a", "b"])]);
+    expect(model.readingOf(run, 20_000)?.kind).toBeUndefined();
+    expect(model.readingOf(run, 5000 + MINUTE)).toMatchObject({ kind: "shielded-cancel", since: 5000 });
+    // "a" closes: "b", spared by the later cancel, is what is left.
+    model.apply(row("workflow.scope.closed", { run: "run-1", scope: "a", outcome: "done" }, 62_000));
+    expect(model.readingOf(run, 63_000)?.kind).toBeUndefined();
+    expect(model.readingOf(run, 10_000 + MINUTE)).toMatchObject({ kind: "shielded-cancel", since: 10_000 });
   });
 
   test("a finished run is not followed", () => {
