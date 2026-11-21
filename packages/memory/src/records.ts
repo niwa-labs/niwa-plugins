@@ -128,8 +128,29 @@ export const PageWritten = record(
   }),
 );
 
+/** The id of a turn of an agent's inbox, as the agents module names it. */
+const TurnId = z.string().regex(/^(msg|fact)-[0-9a-f]{6,16}$/);
+
+/**
+ * The digest of a session attached to an agent was taken into its memory. The digest stays where it is,
+ * in the agent's inbox; the memory keeps where it is (`record`, `turn`), which session it tells of and from
+ * where up to where, and the project the session works in.
+ */
+export const DigestTaken = record(
+  "memory.digest.taken",
+  z.object({
+    memory: MemoryName,
+    turn: TurnId,
+    record: z.string().min(1),
+    session: SessionRefText,
+    from: z.string().min(1).optional(),
+    upto: z.string().min(1),
+    project: Project.optional(),
+  }),
+);
+
 /** The record types the module declares. */
-export const MEMORY_TYPES = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten] as const;
+export const MEMORY_TYPES = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken] as const;
 
 /** Where a note stands. */
 export const NoteStatus = z.enum(["live", "retracted", "erased"]);
@@ -175,12 +196,12 @@ export const PageView = z.object({
 });
 export type PageView = z.output<typeof PageView>;
 
-/** One thing a search found: a note or a page, with where it stands in the journal. */
+/** One thing a search found: a note, a page or the digest of a session, with where it stands in the journal. */
 export const SearchHit = z.object({
-  kind: z.enum(["note", "page"]),
-  /** The note's id, or the page's name. */
+  kind: z.enum(["note", "page", "session"]),
+  /** The note's id, the page's name, or the turn that told the digest. */
   id: z.string(),
-  /** The page's title; the text of a note, or the start of a page's text. */
+  /** The page's title, or the session a digest tells of; the text of a note, or the start of a longer text. */
   title: z.string().optional(),
   text: z.string(),
   about: NoteAbout.optional(),
@@ -271,7 +292,7 @@ export const memoryPageGet = actionRef("memory.page.get", {
 
 export const memorySearch = actionRef("memory.search", {
   description:
-    "Searches a memory by words: the notes that hold and the pages, best first. With `project`, only what holds for that project and in general. Words match whole or as the start of a longer word; nothing leaves the host.",
+    "Searches a memory by words: the notes that hold, the pages and the digests of attached sessions, best first. With `project`, only what holds for that project and in general. Words match whole or as the start of a longer word; nothing leaves the host.",
   input: z.object({
     ...Named,
     query: z.string().min(1).max(500),

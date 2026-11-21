@@ -12,16 +12,18 @@
 
 import { createHash } from "node:crypto";
 
-import { action, owner, recordTypeName, seq } from "@niwa-labs/core";
+import { action, owner, recordId, recordTypeName, seq } from "@niwa-labs/core";
 import type { ActionContext, Address, Caller, JournalReader } from "@niwa-labs/core";
 import { plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
-import { AGENT_BRIEFING, AgentAttached, agentGet } from "@niwa-labs/agent/records";
+import { AGENT_BRIEFING, AgentAttached, AgentTurnQueued, SessionDigestTaken, agentGet } from "@niwa-labs/agent/records";
 import type { TurnAuthor } from "@niwa-labs/agent/records";
 
 import { Memories } from "./fold.ts";
+import type { TakenDigest } from "./fold.ts";
 import {
   MEMORY_TYPES,
+  DigestTaken,
   NoteConfirmed,
   NoteCorrected,
   NoteDropped,
@@ -68,9 +70,11 @@ export interface MemoryOptions {
 export interface MemoryLimits {
   /** The most characters the top layer of a memory shows, headings included. Default 4000, about a thousand tokens. */
   readonly top: number;
+  /** How many of the latest digests of sessions a search reads. Default 200. */
+  readonly sessions: number;
 }
 
-export const DEFAULT_LIMITS: MemoryLimits = { top: 4_000 };
+export const DEFAULT_LIMITS: MemoryLimits = { top: 4_000, sessions: 200 };
 
 /** A refusal of the memory module: a memory the caller may not reach, a note it may not change. */
 export class MemoryRefusal extends Error {
@@ -103,8 +107,18 @@ function opening(text: string, max = 280): string {
   return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
-/** The notes that hold and the pages of a memory, as a search ranks them. */
-export function searchable(notes: readonly NoteView[], pages: readonly PageView[], project: string | undefined): Array<{ text: string; value: SearchHit }> {
+/** A digest a search reads, with its text when the journal still has it. */
+export interface ReadDigest extends TakenDigest {
+  readonly text: string;
+}
+
+/** The notes that hold, the pages and the digests of a memory, as a search ranks them. */
+export function searchable(
+  notes: readonly NoteView[],
+  pages: readonly PageView[],
+  digests: readonly ReadDigest[],
+  project: string | undefined,
+): Array<{ text: string; value: SearchHit }> {
   const ofNotes = notes
     .filter((note) => holds(note) && holdsFor(note.project, project))
     .map((note) => ({
@@ -127,7 +141,22 @@ export function searchable(notes: readonly NoteView[], pages: readonly PageView[
       text: `${page.title}\n${page.text}`,
       value: { kind: "page" as const, id: page.page, title: page.title, text: opening(page.text), ...(page.project === undefined ? {} : { project: page.project }), score: 0, seq: page.seq },
     }));
-  return [...ofNotes, ...ofPages].sort((a, b) => a.order - b.order).map(({ text, value }) => ({ text, value }));
+  const ofDigests = digests
+    .filter((digest) => holdsFor(digest.project, project))
+    .map((digest) => ({
+      order: digest.seq,
+      text: digest.text,
+      value: {
+        kind: "session" as const,
+        id: digest.turn,
+        title: digest.session,
+        text: opening(digest.text),
+        ...(digest.project === undefined ? {} : { project: digest.project }),
+        score: 0,
+        seq: digest.seq,
+      },
+    }));
+  return [...ofNotes, ...ofPages, ...ofDigests].sort((a, b) => a.order - b.order).map(({ text, value }) => ({ text, value }));
 }
 
 /** The memory module. */
@@ -359,6 +388,14 @@ export function memory(options: MemoryOptions = {}): Plugin {
       }),
     );
 
+    /** The latest digests, within the limit, with their texts read from the turns that told them. */
+    const readDigests = (digests: readonly TakenDigest[]): ReadDigest[] =>
+      digests.slice(-limits.sessions).flatMap((digest) => {
+        const told = journal().get(recordId(digest.record));
+        const parsed = told === undefined ? undefined : AgentTurnQueued.schema.safeParse(told.data);
+        return parsed?.success === true ? [{ ...digest, text: parsed.data.text }] : [];
+      });
+
     api.action(
       action(memorySearch, {
         recovery: "repeat",
@@ -367,7 +404,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
         run: (input, ctx) => {
           const { memory } = reach(ctx, input.memory);
           const memories = asOf(input.at);
-          const found = rank(input.query, searchable(memories.notesOf(memory), memories.pagesOf(memory), input.project), input.limit);
+          const found = rank(input.query, searchable(memories.notesOf(memory), memories.pagesOf(memory), readDigests(memories.digestsOf(memory)), input.project), input.limit);
           return { memory, hits: found.map(({ value, score }) => ({ ...value, score })) };
         },
       }),
@@ -401,15 +438,34 @@ export function memory(options: MemoryOptions = {}): Plugin {
       }),
     );
 
-    /** The directory the session attached to an agent last works in. */
-    const attachedLast = (agent: string): string | undefined => {
+    /** The directory the session attached to an agent last works in; with `session`, the directory of that session. */
+    const attachedLast = (agent: string, session?: string): string | undefined => {
       let cwd: string | undefined;
       for (const stored of journal().since(seq(0), [recordTypeName(AgentAttached.name)])) {
         const parsed = AgentAttached.schema.safeParse(stored.data);
-        if (parsed.success && parsed.data.agent === agent) cwd = parsed.data.cwd;
+        if (parsed.success && parsed.data.agent === agent && (session === undefined || parsed.data.session === session)) cwd = parsed.data.cwd;
       }
       return cwd;
     };
+
+    // The digests of attached sessions reach the memory of their agent: where the digest is, not a copy.
+    api.on(SessionDigestTaken, { id: "digest-intake", from: "start" }, async (turn, step, told) => {
+      if (turn.source?.kind !== "session-digest") return;
+      const project = attachedLast(turn.agent, turn.source.session);
+      await step.emit(
+        DigestTaken,
+        {
+          memory: turn.agent,
+          turn: turn.turn,
+          record: String(told.id),
+          session: turn.source.session,
+          ...(turn.source.from === undefined ? {} : { from: turn.source.from }),
+          upto: turn.source.upto,
+          ...(project === undefined ? {} : { project }),
+        },
+        { key: "taken" },
+      );
+    });
 
     api.offer(AGENT_BRIEFING, { title: "What it remembers", action: memoryBrief.name });
     api.action(

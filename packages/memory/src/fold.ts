@@ -3,7 +3,7 @@
 
 import type { StoredRecord } from "@niwa-labs/core";
 
-import { NoteConfirmed, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageWritten } from "./records.ts";
+import { DigestTaken, NoteConfirmed, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageWritten } from "./records.ts";
 import type { MemoryName, NoteId, NoteView, PageName, PageView } from "./records.ts";
 
 /** A record type with its schema: what the fold parses a stored record with. */
@@ -19,15 +19,26 @@ export function dataAs<T>(stored: StoredRecord, type: Typed<T>): T | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+/** A digest taken into a memory: where it is in the journal, and what it tells of. */
+export interface TakenDigest {
+  readonly turn: string;
+  readonly record: string;
+  readonly session: string;
+  readonly project?: string;
+  /** The position where it was taken. */
+  readonly seq: number;
+}
+
 /** The notes of every memory, as far as the records folded so far say. */
 export class Memories {
   readonly #notes = new Map<MemoryName, Map<NoteId, NoteView>>();
   readonly #pages = new Map<MemoryName, Map<PageName, PageView>>();
+  readonly #digests = new Map<MemoryName, TakenDigest[]>();
   /** The position of the last record folded. */
   seq = 0;
 
   /** The record types a fold reads. */
-  static readonly TYPES: readonly string[] = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten].map((type) => type.name);
+  static readonly TYPES: readonly string[] = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken].map((type) => type.name);
 
   /** The notes of one memory, in the order they were written. */
   notesOf(memory: MemoryName): NoteView[] {
@@ -52,6 +63,11 @@ export class Memories {
 
   page(memory: MemoryName, page: PageName): PageView | undefined {
     return this.#pages.get(memory)?.get(page);
+  }
+
+  /** The digests taken into one memory, oldest first. */
+  digestsOf(memory: MemoryName): readonly TakenDigest[] {
+    return this.#digests.get(memory) ?? [];
   }
 
   /** Fold one more record. Records come in the order of the journal. */
@@ -81,6 +97,13 @@ export class Memories {
         written: at,
         seq: at,
       });
+      return;
+    }
+    const taken = dataAs(stored, DigestTaken);
+    if (taken !== undefined) {
+      const digests = this.#digests.get(taken.memory) ?? [];
+      this.#digests.set(taken.memory, digests);
+      digests.push({ turn: taken.turn, record: taken.record, session: taken.session, ...(taken.project === undefined ? {} : { project: taken.project }), seq: at });
       return;
     }
     const page = dataAs(stored, PageWritten);
