@@ -108,6 +108,16 @@ interface GitLabDiscussion {
   notes: Array<{ id: number; body: string; author?: { username?: string }; resolvable?: boolean; resolved?: boolean; system?: boolean }>;
 }
 
+/** The error with every known secret value taken out of its message. */
+function scrubbed(error: ForgeError, secrets: readonly string[]): ForgeError {
+  let message = error.message;
+  for (const value of secrets) if (value.length > 0) message = message.split(value).join("[secret]");
+  return new ForgeError(error.code, message, {
+    ...(error.status === undefined ? {} : { status: error.status }),
+    ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
+  });
+}
+
 /** A path with its links resolved, as the git module records a repository; the path itself when it does not exist. */
 function real(path: string): string {
   try {
@@ -586,10 +596,18 @@ export function forge(options: ForgeOptions): Plugin {
             key,
             value: typeof value === "string" ? value : resolveSecret(api.home(), value.secret, env),
           }));
-          const made = await gitlab(repo.host).send<GitLabPipeline>("POST", projectPath(repo, "/pipeline"), {
-            ref: input.ref,
-            ...(variables.length === 0 ? {} : { variables }),
-          });
+          const secrets = Object.values(input.variables ?? {}).flatMap((value, at) => (typeof value === "string" ? [] : [variables[at]?.value ?? ""]));
+          let made: GitLabPipeline;
+          try {
+            made = await gitlab(repo.host).send<GitLabPipeline>("POST", projectPath(repo, "/pipeline"), {
+              ref: input.ref,
+              ...(variables.length === 0 ? {} : { variables }),
+            });
+          } catch (error) {
+            // The server may repeat what it was given: a secret value is taken out of what it said.
+            if (error instanceof ForgeError) throw scrubbed(error, secrets);
+            throw error;
+          }
           return { pipeline: made.id, ref: made.ref, sha: made.sha, state: runStateOf(made.status) };
         },
       }),

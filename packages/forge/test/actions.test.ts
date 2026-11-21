@@ -148,3 +148,12 @@ test("ensure without a number changes no open pull request: a grant on pr/new ca
   expect(await owner.call(forgePrEnsure, { repo: BILLING, number: 7, branch: "topic", base: "develop", title: "Renamed" })).toMatchObject({ created: false });
   expect(host.billing.mrs.get(7)).toMatchObject({ title: "Renamed", target_branch: "develop" });
 });
+
+test("a secret value the server repeats in an error is not in the error, nor in the journal", async () => {
+  const host = await served({ env: { NIWA_SECRET_DEPLOY_KEY: "s3cr3t-deploy-value" } });
+  host.server.queue("POST", /\/pipeline$/, 400, { message: { variables: ["DEPLOY_KEY=s3cr3t-deploy-value is not allowed"] } });
+  const error = await host.niwa.call(forgePipelineTrigger, { repo: BILLING, ref: "main", variables: { DEPLOY_KEY: secret("DEPLOY_KEY") } }).catch((caught: unknown) => caught);
+  expect(String((error as Error).message)).toContain("is not allowed");
+  expect(String((error as Error).message)).not.toContain("s3cr3t-deploy-value");
+  expect(JSON.stringify(await host.records())).not.toContain("s3cr3t-deploy-value");
+});
