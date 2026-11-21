@@ -19,7 +19,7 @@ import { action, agent as agentAddress, addressText, confirmOptions, isYes, owne
 import type { ActionContext, Address, Caller, JournalReader, Step } from "@niwa-labs/core";
 import { COCKPIT_MODULE, plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
-import { AGENT_BRIEFING, AgentAttached, AgentDetached, AgentTurnQueued, SessionDigestTaken, agentGet } from "@niwa-labs/agent/records";
+import { AGENT_BRIEFING, AGENT_PROMPT_SECTION, AgentAttached, AgentDetached, AgentTurnQueued, SessionDigestTaken, agentGet } from "@niwa-labs/agent/records";
 import type { TurnAuthor } from "@niwa-labs/agent/records";
 
 import { QuestionName, RequestAnswered, requestAsk, requestCancel, requestFind, requestGet } from "@niwa-labs/requests/records";
@@ -579,7 +579,9 @@ export function memory(options: MemoryOptions = {}): Plugin {
       if (now().changesOf(turn.agent) >= limits.consolidateEvery) await step(memoryConsolidate, { memory: turn.agent }, { key: "consolidate" });
     });
 
+    // The same top layer, in the briefing and in the prompt a new session of the agent starts with.
     api.offer(AGENT_BRIEFING, { title: "What it remembers", action: memoryBrief.name });
+    api.offer(AGENT_PROMPT_SECTION, { id: "top", action: memoryBrief.name });
     api.action(
       action(memoryBrief, {
         recovery: "repeat",

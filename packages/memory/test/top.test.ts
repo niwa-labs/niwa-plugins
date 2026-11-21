@@ -5,7 +5,7 @@ import { afterEach, expect, test } from "bun:test";
 
 import { AgentAttached } from "@niwa-labs/agent/records";
 
-import { bob, closeAll, memoryHost, owner, rin } from "./fixtures/host.ts";
+import { agentPromptSections, bob, closeAll, memoryHost, owner, rin } from "./fixtures/host.ts";
 
 afterEach(closeAll);
 
@@ -72,4 +72,13 @@ test("an agent's briefing carries the top layer of its memory for the project it
   // Another agent asking for Rin's briefing does not get her memory.
   expect((await host.as<{ text: string }>(bob, "agent.briefing", { agent: "rin" })).text).toBe("");
   expect((await host.as<{ text: string }>(rin, "agent.briefing", { agent: "rin" })).text).toContain("Astro");
+});
+
+test("the top layer is also a section of the prompt of the agent's sessions", async () => {
+  const host = await memoryHost({}, { agents: [{ name: "lead", harness: "h", prompt: "p", project: { cwd: "/work/billing" } }] });
+  const billing = await noted(host, { memory: "lead", text: "Invoices are made nightly.", project: "/work/billing" }, owner);
+  const prompt = () => host.as<{ sections: Array<{ id: string; text: string }> }>(owner, agentPromptSections.name, { agent: "lead" });
+  expect((await prompt()).sections).toEqual([]);
+  await host.as(owner, "memory.lift", { memory: "lead", note: billing });
+  expect((await prompt()).sections).toEqual([{ id: "memory:top", text: `For /work/billing:\n- Invoices are made nightly. (${billing})` }]);
 });

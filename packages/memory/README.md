@@ -12,7 +12,7 @@ const bind = agentsModule.bind(sessionsModule.bind());
 host.use(messages({ bind }), requests({ bind }), sessionsModule, agentsModule, memory({ bind }));
 ```
 
-Install it after the agents module, which reads its briefing section, and on
+Install it after the agents module, which reads its briefing and prompt sections, and on
 a host with the requests module, which asks the owner.
 
 There is one memory module on a host and a memory in it for every agent,
@@ -50,8 +50,9 @@ earlier position, while the record that first held it stays.
   external service is used.
 - `memory.top` is the top layer for a project: lifted notes about the
   owner, for the project and in general, newest first, within 4000
-  characters. The agent's briefing carries it as "What it remembers", for
-  the agent's project or the directory of the session attached to it last.
+  characters. The agent's briefing carries it as "What it remembers", and
+  so does the prompt a new session of the agent starts with, for the agent's
+  project or the directory of the session attached to it last.
 
 ## Context requests
 

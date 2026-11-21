@@ -2,17 +2,25 @@
 // the module share. The memory is given a binding the check steers, so a call made from the check speaks
 // as the address the check names.
 
-import { action, actionName, owner, recordId } from "@niwa-labs/core";
+import { action, actionName, actionRef, owner, recordId } from "@niwa-labs/core";
 import type { Action, ActionContext, ActionName, Address, OperationId, RecordType, StoredRecord } from "@niwa-labs/core";
 import { plugin } from "@niwa-labs/plugin";
+import { z } from "zod";
 import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
-import { AGENT_BRIEFING, AGENT_TYPES, BriefingSectionOutput, agentBriefing, agentGet } from "@niwa-labs/agent/records";
+import { AGENT_BRIEFING, AGENT_PROMPT_SECTION, AGENT_TYPES, BriefingSectionOutput, PromptSectionInput, PromptSectionOutput, agentBriefing, agentGet } from "@niwa-labs/agent/records";
 import type { AgentDefinitionInput } from "@niwa-labs/agent/records";
 import { baseStack, createNiwa, tempHome, testClock } from "@niwa-labs/testing";
 import type { Host, TestClock } from "@niwa-labs/testing";
 
 import { memory } from "../../src/index.ts";
 import type { MemoryOptions } from "../../src/index.ts";
+
+/** What the stand-in composes of the prompt of an agent's session: the sections plugins offer, as the module reads them at a start. */
+export const agentPromptSections = actionRef("agent.prompt.sections", {
+  description: "The sections plugins offer to the prompt of an agent's sessions, as the stand-in reads them at a start.",
+  input: PromptSectionInput,
+  output: z.object({ sections: z.array(z.object({ id: z.string(), text: z.string() })) }),
+});
 
 /**
  * The agents module as far as the memory reads it: it declares the agents' records, answers `agent.get`
@@ -33,6 +41,23 @@ export function agentsStandIn(agents: readonly AgentDefinitionInput[] = [], hold
           if (definition === undefined) throw new Error(`there is no agent "${agent}"`);
           const address = { kind: "agent" as const, id: agent };
           return { name: agent, address, source: "config" as const, status: "asleep" as const, definition: { hands: [], tools: "all" as const, ...definition }, queued: 0, attached: [] };
+        },
+      }),
+    );
+    api.action(
+      action(agentPromptSections, {
+        recovery: "repeat",
+        effect: "read",
+        world: "niwa",
+        run: async ({ agent }, ctx) => {
+          const sections: Array<{ id: string; text: string }> = [];
+          for (const { plugin: by, value } of api.offers(AGENT_PROMPT_SECTION)) {
+            if (value.agent !== undefined && value.agent !== agent) continue;
+            const written = await ctx.step.outcome<unknown, unknown>(actionName(value.action), { agent });
+            const parsed = written.status === "completed" ? PromptSectionOutput.safeParse(written.value) : undefined;
+            if (parsed?.success === true && parsed.data.text.trim() !== "") sections.push({ id: `${String(by)}:${value.id}`, text: parsed.data.text.trim() });
+          }
+          return { sections };
         },
       }),
     );
