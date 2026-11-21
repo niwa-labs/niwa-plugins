@@ -113,6 +113,8 @@ interface Track {
   readonly subject: Subject;
   readonly kind: "session" | "run";
   base: Base;
+  /** What the subject was last found doing, held or not; `since` is the moment that changed. */
+  shown: Reading["state"];
   /** Whether niwa runs the session and says its turns itself; a session only the history follows is not. */
   managed: boolean;
   since: number;
@@ -186,6 +188,18 @@ export class Model {
     if (row.seq <= this.seen) return;
     this.seen = row.seq;
     const at = row.at as number;
+    this.fold(row, at);
+    // A subject that is now in another state has been in it since this record.
+    for (const track of this.tracks.values()) {
+      const state = this.heldState(track) ?? track.base;
+      if (state !== track.shown) {
+        track.shown = state;
+        track.since = at;
+      }
+    }
+  }
+
+  private fold(row: StoredRecord, at: number): void {
     switch (row.type as string) {
       case "session.started": {
         const data = Started.safeParse(row.data);
@@ -193,7 +207,6 @@ export class Model {
         const track = this.revive(sessionSubjectOf(data.data.session), "session", at);
         track.managed = true;
         track.base = "idle";
-        track.since = at;
         track.last = at;
         if (data.data.stuckAfter !== undefined) track.stuckAfter = data.data.stuckAfter;
         return;
@@ -591,7 +604,7 @@ export class Model {
 
   private create(subject: Subject, kind: Track["kind"], at: number): Track | undefined {
     if (this.gone.has(subject)) return undefined;
-    const track: Track = { subject, kind, base: "idle", managed: false, since: at, last: at, started: kind === "session", asked: new Map(), steps: new Map(), timers: new Set(), shields: new Map() };
+    const track: Track = { subject, kind, base: "idle", managed: false, shown: "idle", since: at, last: at, started: kind === "session", asked: new Map(), steps: new Map(), timers: new Set(), shields: new Map() };
     this.tracks.set(subject, track);
     return track;
   }
@@ -639,7 +652,6 @@ export class Model {
   }
 
   private become(track: Track, base: Base, at: number): void {
-    if (track.base !== base) track.since = at;
     track.base = base;
     track.last = at;
   }

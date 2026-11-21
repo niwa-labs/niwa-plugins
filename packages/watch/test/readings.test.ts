@@ -135,6 +135,14 @@ describe("sessions", () => {
     expect(read(model, me, 5 * MINUTE)).toMatchObject({ state: "working" });
   });
 
+  test("a question puts the session in waiting-human from its own moment, and the answer ends it", () => {
+    const asker = { kind: "session", harness: "claude", id: "abc" };
+    const model = modelOf([...turn(0), row("request.created", { id: "req-1", to: { kind: "owner" }, from: asker }, MINUTE)]);
+    expect(read(model, me, 30 * MINUTE)).toMatchObject({ state: "waiting-human", since: MINUTE });
+    model.apply(row("request.answered", { id: "req-1", answer: {} }, 31 * MINUTE));
+    expect(read(model, me, 32 * MINUTE)).toMatchObject({ state: "working", since: 31 * MINUTE });
+  });
+
   test("a session of another harness is unknown when first seen, working with its progress, idle when it pauses", () => {
     const named = { harness: "codex", native: "x1" };
     const subject = sessionSubject("codex", "x1");
@@ -395,6 +403,28 @@ describe("runs", () => {
     expect(model.readingOf(run, 13_000)?.state).toBe("looping");
     model.apply(row("workflow.phase.left", { run: "run-1", branch: "" }, 14_000, inv));
     expect(model.readingOf(run, 15_000)).toMatchObject({ state: "working", last: 14_000 });
+  });
+
+  test("since is when the state last changed: before a wait, inside it, and after it", () => {
+    const model = modelOf(started(10));
+    expect(model.readingOf(run, 50)).toMatchObject({ state: "working", since: 10 });
+    model.apply(row("niwa.invocation.state", { invocation: "inv-1", state: "waiting" }, 100));
+    expect(model.readingOf(run, 150)).toMatchObject({ state: "waiting-event", since: 100 });
+    model.apply(row("request.created", { id: "req-o", to: { kind: "owner" } }, 120, inv));
+    expect(model.readingOf(run, 150)).toMatchObject({ state: "waiting-human", since: 120 });
+    model.apply(row("request.answered", { id: "req-o", answer: {} }, 180));
+    expect(model.readingOf(run, 190)).toMatchObject({ state: "waiting-event", since: 180 });
+    model.apply(row("niwa.invocation.state", { invocation: "inv-1", state: "running" }, 200));
+    expect(model.readingOf(run, 210)).toMatchObject({ state: "working", since: 200 });
+  });
+
+  test("the time a pause begins is the time it is read from", () => {
+    const begun = started();
+    const pause = row("workflow.run.pause-requested", { run: "run-1", kind: "deadline", deadline: MINUTE }, MINUTE);
+    const model = modelOf([...begun, pause]);
+    expect(model.readingOf(run, 2 * MINUTE)).toMatchObject({ state: "waiting-human", since: MINUTE });
+    model.apply(row("workflow.run.continued", { run: "run-1", pause: String(pause.id) }, 3 * MINUTE));
+    expect(model.readingOf(run, 4 * MINUTE)).toMatchObject({ state: "working", since: 3 * MINUTE });
   });
 
   test("a record read twice is counted once", () => {
