@@ -6,7 +6,7 @@ import type { Caller, StoredRecord } from "@niwa-labs/core";
 import { DEFAULT_SETTINGS, Model, SOURCES, transitions } from "../src/readings.ts";
 import type { OpenFlag, Settings, Transition } from "../src/readings.ts";
 import { runSubject, sessionSubject } from "../src/records.ts";
-import type { Reading } from "../src/records.ts";
+import { Reading } from "../src/records.ts";
 
 const MINUTE = 60_000;
 const HOST: Caller = { kind: "host" };
@@ -167,6 +167,27 @@ describe("sessions", () => {
     // A new turn is a reason.
     model.apply(row("session.turn-started", { session: ME, turn: 2 }, 5 * MINUTE));
     expect(read(model, me, 6 * MINUTE)?.state).toBe("working");
+  });
+
+  test("a session whose name cannot be a subject is passed over, not thrown at", () => {
+    const rows = [
+      row("session.started", { session: "claude", id: "s-1" }, 0),
+      row("session.turn-started", { session: "claude ", turn: 1 }, 0),
+      row("session.activity", { session: { harness: "cl aude", native: "x" } }, 0),
+      row("session.progress", { session: { harness: "claude", native: "" }, done: 0, total: 1 }, 0),
+      row("history.session.seen", { session: "  x", harness: "claude" }, 0),
+      row("request.created", { id: "req-1", to: { kind: "owner" }, from: { kind: "session", harness: "a b", id: "c" } }, 0),
+      ...turn(0),
+    ];
+    expect(() => modelOf(rows)).not.toThrow();
+    expect(modelOf(rows).readings(MINUTE).map((one) => one.subject)).toEqual([me]);
+  });
+
+  test("a limit that is not a whole number of milliseconds is ignored, so a flag can always be dated", () => {
+    const model = modelOf([row("session.started", { session: ME, id: "s-1", stuckAfter: 1500.5 }, 0), row("session.turn-started", { session: ME, turn: 1 }, 0)]);
+    const reading = read(model, me, 20 * MINUTE);
+    expect(reading).toMatchObject({ state: "stuck", kind: "silent", since: 10 * MINUTE });
+    expect(Reading.safeParse(reading).success).toBe(true);
   });
 
   test("a record that cannot be read is passed over", () => {

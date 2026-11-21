@@ -15,7 +15,7 @@ import { z } from "zod";
 import { keyUnder, stableJson } from "@niwa-labs/core";
 import type { StoredRecord } from "@niwa-labs/core";
 
-import { Subject, runSubject, sessionSubject } from "./records.ts";
+import { Subject, runSubject, sessionSubject, tryRunSubject, trySessionSubject } from "./records.ts";
 import type { Reading, StuckKind, WatchRecoveredData, WatchStuckData } from "./records.ts";
 
 /** The record types, and families, the model reads. */
@@ -58,17 +58,25 @@ export const DEFAULT_SETTINGS: Settings = {
 
 // What is read of each record. A field the model does not use is not named.
 const Text = z.string().min(1);
-const SessionObject = z.object({ harness: Text, native: Text });
-/** A session as records name it: the pair as one text (niwa's own), or as an object (the history's). */
-const SessionNamed = z.union([Text, SessionObject]);
+/** The id of a run as a record names it, when it can name a subject. */
+const RunName = Text.refine((run) => tryRunSubject(run) !== undefined, "not the id of a run");
+const SessionObject = z
+  .object({ harness: Text, native: Text })
+  .refine((named) => trySessionSubject(named.harness, named.native) !== undefined, "not a session");
+/** A session as records name it, when it can name a subject: the pair as one text (niwa's own), or as an object (the history's). */
+const SessionNamed = z.union([Text.refine((named) => Subject.safeParse(`session:${named}`).success, "not a session"), SessionObject]);
 
 const OfSession = z.object({ session: SessionNamed });
-const Started = z.object({ session: SessionNamed, stuckAfter: z.number().positive().optional() });
+const Started = z.object({
+  session: SessionNamed,
+  // A limit that is no whole number of milliseconds is not one a flag can be dated by: the session is followed under the default.
+  stuckAfter: z.number().int().positive().optional().catch(undefined),
+});
 const TurnEnded = z.object({ session: SessionNamed, how: z.string().optional() });
 const HistoryEnded = z.object({ session: SessionNamed, certainty: z.string().optional() });
 const Activity = z.object({ session: SessionNamed, tool: z.string().optional(), permission: z.unknown().optional() });
-const OfRun = z.object({ run: Text });
-const Scope = z.object({ run: Text, scope: Text, shield: z.boolean().optional() });
+const OfRun = z.object({ run: RunName });
+const Scope = z.object({ run: RunName, scope: Text, shield: z.boolean().optional() });
 const OfInvocation = z.object({ invocation: Text });
 const Cancelled = z.object({ invocation: Text, prefixes: z.array(z.string()).optional(), except: z.array(z.string()).optional() });
 const Outcome = z.object({ invocation: Text, key: z.string() });
@@ -80,9 +88,9 @@ const WAIT_ACTION = "niwa.wait";
 /** The action a wait of a script for a record, with or without a timeout, records as its step. */
 const SCRIPT_WAIT_ACTION = "workflow.script.wait";
 const InvocationState = z.object({ invocation: Text, state: z.string() });
-const Paused = z.object({ run: Text, choices: z.array(z.string()).optional() });
-const PauseRequested = z.object({ run: Text, kind: z.string().optional() });
-const Continued = z.object({ run: Text, pause: z.string() });
+const Paused = z.object({ run: RunName, choices: z.array(z.string()).optional() });
+const PauseRequested = z.object({ run: RunName, kind: z.string().optional() });
+const Continued = z.object({ run: RunName, pause: z.string() });
 const RequestMade = z.object({
   id: Text,
   to: z.object({ kind: z.string() }),
@@ -460,7 +468,7 @@ export class Model {
         const from = data.data.from;
         const subject =
           from?.kind === "session" && from.harness !== undefined && from.id !== undefined
-            ? sessionSubject(from.harness, from.id)
+            ? trySessionSubject(from.harness, from.id)
             : this.ofActor(row)?.subject;
         const track = subject === undefined ? undefined : this.tracks.get(subject);
         if (subject === undefined) return;

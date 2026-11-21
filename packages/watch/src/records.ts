@@ -42,18 +42,51 @@ export type WatchState = z.infer<typeof WatchState>;
 export const StuckKind = z.enum(["silent", "looping", "shielded-cancel"]);
 export type StuckKind = z.infer<typeof StuckKind>;
 
+/** What a subject names: a run by its id, or a session by its harness and the id the harness gave it. */
+type SubjectParts = { readonly kind: "run"; readonly id: string } | { readonly kind: "session"; readonly harness: string; readonly native: string };
+
+/** The one reading of a subject's text: a run is `run:<id>`, a session `session:<harness> <id>` with a harness that holds no space. */
+function partsOf(text: string): SubjectParts | undefined {
+  const run = /^run:(\S.*)$/.exec(text);
+  if (run?.[1] !== undefined) return { kind: "run", id: run[1] };
+  const session = /^session:(\S+) (\S.*)$/.exec(text);
+  if (session?.[1] !== undefined && session[2] !== undefined) return { kind: "session", harness: session[1], native: session[2] };
+  return undefined;
+}
+
 /** A session or a run: `session:<harness> <native id>`, `run:<id>`. */
-export const Subject = z.string().regex(/^(session|run):\S.*$/, "a subject is session:<harness> <id> or run:<id>").brand<"WatchSubject">();
+export const Subject = z
+  .string()
+  .refine((text) => partsOf(text) !== undefined, "a subject is session:<harness> <id> or run:<id>")
+  .brand<"WatchSubject">();
 export type Subject = z.infer<typeof Subject>;
+
+/** The subject of a session, when the harness and the id name one: neither empty, and no space in the harness. */
+export function trySessionSubject(harness: string, native: string): Subject | undefined {
+  const parsed = Subject.safeParse(`session:${harness} ${native}`);
+  const parts = parsed.success ? partsOf(parsed.data) : undefined;
+  // The text is read back, so that two pairs cannot give one subject.
+  return parts?.kind === "session" && parts.harness === harness && parts.native === native ? parsed.data : undefined;
+}
+
+/** The subject of a run, when the id names one: it is not empty and does not start with a space. */
+export function tryRunSubject(run: string): Subject | undefined {
+  const parsed = Subject.safeParse(`run:${run}`);
+  return parsed.success ? parsed.data : undefined;
+}
 
 /** The subject of a session, from the harness and the id the harness gave it. */
 export function sessionSubject(harness: string, native: string): Subject {
-  return Subject.parse(`session:${harness} ${native}`);
+  const subject = trySessionSubject(harness, native);
+  if (subject === undefined) throw new TypeError(`not a session: harness ${JSON.stringify(harness)}, id ${JSON.stringify(native)}`);
+  return subject;
 }
 
 /** The subject of a run. */
 export function runSubject(run: string): Subject {
-  return Subject.parse(`run:${run}`);
+  const subject = tryRunSubject(run);
+  if (subject === undefined) throw new TypeError(`not a run: ${JSON.stringify(run)}`);
+  return subject;
 }
 
 /**
@@ -111,11 +144,10 @@ export type Reading = z.infer<typeof Reading>;
  */
 export function subjectTarget(subject: Subject): string {
   const encoded = (text: string): string => encodeURIComponent(text).replace(/\*/g, "%2A");
-  const [kind, ...rest] = subject.split(":");
-  const name = rest.join(":");
-  if (kind === "run") return `run/${encoded(name)}`;
-  const space = name.indexOf(" ");
-  return `session/${encoded(name.slice(0, space))}/${encoded(name.slice(space + 1))}`;
+  const parts = partsOf(subject);
+  if (parts === undefined) throw new TypeError(`not a subject: ${JSON.stringify(subject)}`);
+  if (parts.kind === "run") return `run/${encoded(parts.id)}`;
+  return `session/${encoded(parts.harness)}/${encoded(parts.native)}`;
 }
 
 export const watchGet = actionRef("watch.get", {

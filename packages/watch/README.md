@@ -7,9 +7,9 @@ A subject is a session (`session:<harness> <native id>`) or a run (`run:<id>`). 
 | State | Meaning |
 | --- | --- |
 | `working` | A turn or a run is going on and signs of life keep coming. |
-| `waiting-human` | A question the subject asked is open, or the run is paused for a decision. |
-| `waiting-event` | A run is suspended on a record or on other work. |
-| `sleeping` | A run waits for a timer. |
+| `waiting-human` | A question the subject put to the owner is open, or the run is paused for a decision: after a failed step, at a pause someone asked for once the run reaches a boundary, or at a deadline. |
+| `waiting-event` | A run is suspended on a record or on other work, or a subject waits for the answer of a session or another address that is not the owner. |
+| `sleeping` | A run is in a sleep. A wait for a record with a timeout is `waiting-event`: a record can end it. |
 | `idle` | A session between turns, a run asked for and not started. |
 | `looping` | Working, but repeating the same step with nothing changing. |
 | `stuck` | Working and silent for too long, or cancelled and held up by a shielded scope. |
@@ -40,9 +40,16 @@ on: [{ type: "watch.stuck", filter: { kind: "silent" } }]
 
 The model reads by type name and imports none of the plugins that write them, so it works with whichever are installed:
 `session.started`, `.turn-started`, `.turn-ended`, `.activity`, `.progress`, `.ended`; `history.session.*`;
-`workflow.run.*` and `workflow.scope.*`; the steps, cancels and state of the run's invocation (`niwa.step.*`,
-`niwa.invocation.state`); `request.*`; `timer.sleep.requested` and `timer.slept`; and `git.head.moved`, which counts as
-progress for the session its data names or the run whose handler wrote it.
+`workflow.run.*` (including its log lines and pauses), `workflow.phase.*` and `workflow.scope.*`; the steps, cancels, answers
+and state of the run's invocation (`niwa.step.*`, `niwa.invocation.resolved`, `niwa.invocation.state`); `request.*`;
+`timer.sleep.requested` and `timer.slept`; and `git.head.moved`, which counts as progress for the session its data names or
+the run whose handler wrote it.
+
+A turn of a session niwa runs is open until `session.turn-ended` or `session.ended`: a quiet transcript (`history.session.paused`)
+or a guessed end from the history does not close it. Only a session that the history alone follows goes idle on a pause, and
+it is dropped when it is unwatched. Activity that names no tool is a sign of life but not a repeated operation, and the steps
+the workflow bridge writes around a call (its permission check, the clock, the arming of a wake) are signs of life that
+neither add to a loop nor break one.
 
 A service reads new records on a clock (`tick`, 15 seconds) rather than through `api.on`. Silence is the absence of a
 record, which no handler can be woken by, and a handler is an invocation that writes records of its own for every sign
@@ -56,7 +63,7 @@ of life.
 ## Options
 
 `watch({ silentAfter, loopRepeats, sessionLoopRepeats, shieldGrace, tick })`, all in milliseconds except the repeat
-counts. Defaults: 10 minutes, 6, 25, 1 minute, 15 seconds.
+counts, and all positive whole numbers. Defaults: 10 minutes, 6, 25, 1 minute, 15 seconds.
 
 ## Limits
 

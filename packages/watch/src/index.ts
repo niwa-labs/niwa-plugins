@@ -47,7 +47,8 @@ const DEFAULT_TICK = 15_000;
 function settingsOf(options: WatchOptions): Settings {
   const settings: Settings = { ...DEFAULT_SETTINGS, ...stripped(options) };
   for (const [name, value] of Object.entries({ ...settings, tick: options.tick ?? DEFAULT_TICK })) {
-    if (!Number.isFinite(value) || value <= 0) throw new RangeError(`the watch setting "${name}" must be a positive number, got ${String(value)}`);
+    // The times of a flag are whole milliseconds, which the records of a flag require.
+    if (!Number.isSafeInteger(value) || value <= 0) throw new RangeError(`the watch setting "${name}" must be a positive whole number, got ${String(value)}`);
   }
   return settings;
 }

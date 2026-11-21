@@ -9,7 +9,7 @@ import { createNiwa, eventually, tempHome, testClock } from "@niwa-labs/testing"
 import type { TestClock } from "@niwa-labs/testing";
 
 import { watch } from "../src/index.ts";
-import { WatchRecovered, WatchStuck, runSubject, sessionSubject, subjectTarget, watchGet, watchList } from "../src/records.ts";
+import { Subject, WatchRecovered, WatchStuck, runSubject, sessionSubject, subjectTarget, watchGet, watchList } from "../src/records.ts";
 
 const MINUTE = 60_000;
 const START = 1_000_000;
@@ -239,6 +239,15 @@ test("the limits must be positive numbers", () => {
   expect(() => watch({ silentAfter: undefined })).not.toThrow();
 });
 
+test("the limits must be whole numbers of milliseconds and of repeats", () => {
+  expect(() => watch({ silentAfter: 1.5 })).toThrow(/silentAfter/);
+  expect(() => watch({ shieldGrace: 0.5 })).toThrow(/shieldGrace/);
+  expect(() => watch({ tick: 2.5 })).toThrow(/tick/);
+  expect(() => watch({ loopRepeats: 2.5 })).toThrow(/loopRepeats/);
+  expect(() => watch({ sessionLoopRepeats: Number.MAX_SAFE_INTEGER + 2 })).toThrow(/sessionLoopRepeats/);
+  expect(() => watch({ silentAfter: 90_000, loopRepeats: 3 })).not.toThrow();
+});
+
 /** The actions a plugin registers, read by running its setup against a recording api. */
 function actionsOf(source: Plugin): Map<string, Action<any, any, any>> {
   const found = new Map<string, Action<any, any, any>>();
@@ -255,6 +264,19 @@ test("the watch only reads: its actions are reads of niwa's own state", () => {
   for (const one of actions.values()) expect(one).toMatchObject({ effect: "read", world: "niwa", recovery: "repeat" });
   expect(actions.get("watch.get")?.target?.({ subject: me })).toBe("session/claude/abc");
   expect(actions.get("watch.get")?.target?.({ subject: runSubject("run-1") })).toBe("run/run-1");
+});
+
+test("a subject names a harness and an id for a session, and an id for a run", () => {
+  for (const text of ["session:claude", "session:claude ", "session: abc", "session:a  b", "run:", "run: x", "thing:x"]) {
+    expect(Subject.safeParse(text).success, text).toBe(false);
+  }
+  for (const text of ["session:claude abc", "session:pi a b/c", "run:run-1", "run:a b"]) {
+    expect(Subject.safeParse(text).success, text).toBe(true);
+  }
+  // Two pairs never give one subject, so never one target.
+  expect(() => sessionSubject("a b", "c")).toThrow(TypeError);
+  expect(() => sessionSubject("a", "")).toThrow(TypeError);
+  expect(subjectTarget(sessionSubject("a", "b c"))).toBe("session/a/b%20c");
 });
 
 test("the target of a call to read a subject is one a grant can name, whatever the id holds", () => {
