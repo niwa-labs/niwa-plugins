@@ -37,8 +37,17 @@ export const PlanItems = z.array(PlanItem).superRefine((items, ctx) => {
   }
 });
 
-/** What a plan is of: a task, a run, a branch, anything the writer names. */
-export const PlanSubject = z.string().trim().min(1);
+/**
+ * What a plan is of: a task, a run, a branch, anything the writer names.
+ *
+ * The text is trimmed and must be well-formed Unicode, so the subject an action works with and the
+ * one a grant names (`planTarget`) are the same text, and encoding it cannot fail.
+ */
+export const PlanSubject = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((text) => text.isWellFormed(), { message: "a plan is of text with no unpaired UTF-16 surrogate" });
 
 /** A revision of a plan was written: the whole plan as it stands from `rev` on. */
 export const PlanRevised = record(
@@ -82,9 +91,13 @@ export const PlanSummary = z.object({
 });
 export type PlanSummary = z.infer<typeof PlanSummary>;
 
-/** What a grant's `@target` names a plan by: one segment, so any text a plan is of stays one place. */
+/**
+ * What a grant's `@target` names a plan by: one segment, so any text a plan is of stays one place.
+ *
+ * The subject is read as the actions read it, so a grant built here matches the call it is for.
+ */
 export function planTarget(of: string): string {
-  return encodeURIComponent(of).replace(/\*/g, "%2A");
+  return encodeURIComponent(PlanSubject.parse(of)).replace(/\*/g, "%2A");
 }
 
 export const planSet = actionRef("plan.set", {

@@ -155,3 +155,15 @@ test("the target of a plan is one a grant can name, whatever the plan is of", ()
   for (const of of ["task-1", "a b", "feature/x", "star*", "{id}@host:1"]) expect(isCallTarget(planTarget(of))).toBe(true);
   expect(planTarget("feature/x*")).toBe("feature%2Fx%2A");
 });
+
+test("a subject is read the way a grant names it, and text that cannot be encoded is refused", async () => {
+  expect(planTarget(" p ")).toBe("p");
+  expect(planTarget("  a b ")).toBe("a%20b");
+  expect(() => planTarget("bad\ud800")).toThrow(/surrogate/);
+  await withPlans(async (niwa) => {
+    await expect(niwa.call(planSet, { of: "bad\udc00", items: [] })).rejects.toThrow(/surrogate/);
+    await expect(niwa.call(planGet, { of: "\ud800x" })).rejects.toThrow(/surrogate/);
+    await niwa.call(planSet, { of: "  spaced  ", items: [build] });
+    expect(await niwa.call(planGet, { of: "spaced" })).toMatchObject({ of: "spaced", rev: 1 });
+  });
+});
