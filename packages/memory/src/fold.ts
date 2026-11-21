@@ -3,8 +3,8 @@
 
 import type { StoredRecord } from "@niwa-labs/core";
 
-import { NoteConfirmed, NoteCorrected, NoteErased, NoteRetracted, NoteWritten } from "./records.ts";
-import type { MemoryName, NoteId, NoteView } from "./records.ts";
+import { NoteConfirmed, NoteCorrected, NoteErased, NoteRetracted, NoteWritten, PageWritten } from "./records.ts";
+import type { MemoryName, NoteId, NoteView, PageName, PageView } from "./records.ts";
 
 /** A record type with its schema: what the fold parses a stored record with. */
 interface Typed<T> {
@@ -22,11 +22,12 @@ export function dataAs<T>(stored: StoredRecord, type: Typed<T>): T | undefined {
 /** The notes of every memory, as far as the records folded so far say. */
 export class Memories {
   readonly #notes = new Map<MemoryName, Map<NoteId, NoteView>>();
+  readonly #pages = new Map<MemoryName, Map<PageName, PageView>>();
   /** The position of the last record folded. */
   seq = 0;
 
   /** The record types a fold reads. */
-  static readonly TYPES: readonly string[] = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased].map((type) => type.name);
+  static readonly TYPES: readonly string[] = [NoteWritten, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, PageWritten].map((type) => type.name);
 
   /** The notes of one memory, in the order they were written. */
   notesOf(memory: MemoryName): NoteView[] {
@@ -42,6 +43,15 @@ export class Memories {
 
   note(memory: MemoryName, note: NoteId): NoteView | undefined {
     return this.#notes.get(memory)?.get(note);
+  }
+
+  /** The pages of one memory, by name. */
+  pagesOf(memory: MemoryName): PageView[] {
+    return [...(this.#pages.get(memory)?.values() ?? [])];
+  }
+
+  page(memory: MemoryName, page: PageName): PageView | undefined {
+    return this.#pages.get(memory)?.get(page);
   }
 
   /** Fold one more record. Records come in the order of the journal. */
@@ -67,6 +77,22 @@ export class Memories {
         confirmed: ownersWord,
         revision: 1,
         written: at,
+        seq: at,
+      });
+      return;
+    }
+    const page = dataAs(stored, PageWritten);
+    if (page !== undefined) {
+      const pages = this.#pages.get(page.memory) ?? new Map<PageName, PageView>();
+      this.#pages.set(page.memory, pages);
+      pages.set(page.page, {
+        memory: page.memory,
+        page: page.page,
+        title: page.title,
+        text: page.text,
+        ...(page.project === undefined ? {} : { project: page.project }),
+        revision: page.revision,
+        by: page.by,
         seq: at,
       });
       return;

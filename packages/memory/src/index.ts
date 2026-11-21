@@ -26,15 +26,20 @@ import {
   NoteErased,
   NoteRetracted,
   NoteWritten,
+  PageWritten,
   memoryConfirm,
   memoryCorrect,
   memoryErase,
   memoryGet,
   memoryList,
   memoryNote,
+  memoryPageGet,
+  memoryPageWrite,
   memoryRetract,
+  memorySearch,
 } from "./records.ts";
-import type { MemoryName, NoteId, NoteView } from "./records.ts";
+import type { MemoryName, NoteId, NoteView, PageView, SearchHit } from "./records.ts";
+import { rank } from "./search.ts";
 
 export * from "./records.ts";
 
@@ -52,7 +57,7 @@ export interface MemoryOptions {
 export class MemoryRefusal extends Error {
   override name = "MemoryRefusal";
   constructor(
-    readonly code: "not-yours" | "no-memory" | "not-owner" | "no-note" | "erased" | "unbound",
+    readonly code: "not-yours" | "no-memory" | "not-owner" | "no-note" | "no-page" | "stale-page" | "erased" | "unbound",
     message: string,
   ) {
     super(message);
@@ -72,6 +77,46 @@ function noteIdOf(operation: string): NoteId {
 /** Whether a note holds now: neither taken back nor erased. */
 export function holds(note: NoteView): boolean {
   return note.status === "live";
+}
+
+/** Whether what holds for `scope` (a project, or none for every project) holds where `project` is asked for. */
+export function holdsFor(scope: string | undefined, project: string | undefined): boolean {
+  return scope === undefined || project === undefined || scope === project;
+}
+
+/** The start of a long text, cut at a word. */
+function opening(text: string, max = 280): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/** The notes that hold and the pages of a memory, as a search ranks them. */
+export function searchable(notes: readonly NoteView[], pages: readonly PageView[], project: string | undefined): Array<{ text: string; value: SearchHit }> {
+  const ofNotes = notes
+    .filter((note) => holds(note) && holdsFor(note.project, project))
+    .map((note) => ({
+      order: note.written,
+      text: `${note.text}\n${note.detail ?? ""}`,
+      value: {
+        kind: "note" as const,
+        id: note.note,
+        text: note.text,
+        about: note.about,
+        ...(note.project === undefined ? {} : { project: note.project }),
+        score: 0,
+        seq: note.seq,
+      },
+    }));
+  const ofPages = pages
+    .filter((page) => holdsFor(page.project, project))
+    .map((page) => ({
+      order: page.seq,
+      text: `${page.title}\n${page.text}`,
+      value: { kind: "page" as const, id: page.page, title: page.title, text: opening(page.text), ...(page.project === undefined ? {} : { project: page.project }), score: 0, seq: page.seq },
+    }));
+  return [...ofNotes, ...ofPages].sort((a, b) => a.order - b.order).map(({ text, value }) => ({ text, value }));
 }
 
 /** The memory module. */
@@ -194,7 +239,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
             .notesOf(memory)
             .filter(holds)
             .filter((note) => input.about === undefined || note.about === input.about)
-            .filter((note) => input.project === undefined || note.project === undefined || note.project === input.project)
+            .filter((note) => holdsFor(note.project, input.project))
             .reverse()
             .slice(0, input.limit);
           return { memory, notes };
@@ -258,6 +303,60 @@ export function memory(options: MemoryOptions = {}): Plugin {
           const found = noteOf(now(), memory, input.note);
           if (found.status !== "erased") await ctx.emit(NoteErased, { memory, note: input.note, by });
           return { note: input.note };
+        },
+      }),
+    );
+
+    api.action(
+      action(memoryPageWrite, {
+        recovery: "repeat",
+        effect: "record",
+        world: "niwa",
+        run: async (input, ctx) => {
+          const { memory, by } = reach(ctx, input.memory);
+          const current = now().page(memory, input.page)?.revision ?? 0;
+          if (input.revision !== undefined && input.revision !== current) {
+            throw new MemoryRefusal("stale-page", `the page ${input.page} is at revision ${String(current)}, not ${String(input.revision)}: read it again`);
+          }
+          const revision = current + 1;
+          await ctx.emit(PageWritten, {
+            memory,
+            page: input.page,
+            title: input.title,
+            text: input.text,
+            ...(input.project === undefined ? {} : { project: input.project }),
+            revision,
+            by,
+          });
+          return { page: input.page, revision };
+        },
+      }),
+    );
+
+    api.action(
+      action(memoryPageGet, {
+        recovery: "repeat",
+        effect: "read",
+        world: "niwa",
+        run: (input, ctx) => {
+          const { memory } = reach(ctx, input.memory);
+          const found = asOf(input.at).page(memory, input.page);
+          if (found === undefined) throw new MemoryRefusal("no-page", `the memory of ${memory} has no page ${input.page}`);
+          return found;
+        },
+      }),
+    );
+
+    api.action(
+      action(memorySearch, {
+        recovery: "repeat",
+        effect: "read",
+        world: "niwa",
+        run: (input, ctx) => {
+          const { memory } = reach(ctx, input.memory);
+          const memories = asOf(input.at);
+          const found = rank(input.query, searchable(memories.notesOf(memory), memories.pagesOf(memory), input.project), input.limit);
+          return { memory, hits: found.map(({ value, score }) => ({ ...value, score })) };
         },
       }),
     );
