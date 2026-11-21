@@ -84,3 +84,6 @@ the oldest unplaced notes past 500. Notes placed by hand and confirmed notes
 are never retired. A digest arriving triggers consolidation once twenty
 records have changed the memory since the last one; `memory.consolidate`
 runs it on demand. All of these limits are set with `memory({ limits })`.
+
+`./cockpit` is the plugin's page: for each agent, the top layer by part, every note with its source and standing, the
+pages, and the share questions that wait for the owner.

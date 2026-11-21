@@ -11,10 +11,11 @@
  */
 
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 import { action, agent as agentAddress, addressText, confirmOptions, isYes, owner, recordId, recordTypeName, seq, stableJson } from "@niwa-labs/core";
 import type { ActionContext, Address, Caller, JournalReader } from "@niwa-labs/core";
-import { plugin } from "@niwa-labs/plugin";
+import { COCKPIT_MODULE, plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
 import { AGENT_BRIEFING, AgentAttached, AgentTurnQueued, SessionDigestTaken, agentGet } from "@niwa-labs/agent/records";
 import type { TurnAuthor } from "@niwa-labs/agent/records";
@@ -192,6 +193,8 @@ export function memory(options: MemoryOptions = {}): Plugin {
 
   return plugin("memory", (api) => {
     api.declare(...MEMORY_TYPES);
+    // The page of this plugin in the cockpit: a client module, offered by the path of its source.
+    api.offer(COCKPIT_MODULE, { id: "memory", entry: fileURLToPath(new URL("./cockpit/index.tsx", import.meta.url)) });
 
     const journal = (): JournalReader => {
       const reader = api.journal?.();
