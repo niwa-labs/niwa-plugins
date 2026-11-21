@@ -82,6 +82,8 @@ export interface FakeProject {
   branches: Map<string, string>;
   /** The variables each triggered pipeline was given, by pipeline id. */
   variables: Map<number, Array<{ key: string; value: string }>>;
+  /** The project merges by fast-forward: a merge makes no merge commit, and a squash is the commit that lands. */
+  fastForward: boolean;
 }
 
 export interface SeenRequest {
@@ -171,6 +173,7 @@ export class FakeGitLab {
       commits: new Map(),
       branches: new Map(),
       variables: new Map(),
+      fastForward: false,
     };
     this.projects.set(id, made);
     return made;
@@ -306,7 +309,7 @@ export class FakeGitLab {
         return { status: 200, body: this.#mrJson(project, mr) };
       }
       mr.state = "merged";
-      mr.merge_commit_sha = sha(`merge-${String(mr.iid)}-${mr.sha}`);
+      if (!project.fastForward) mr.merge_commit_sha = sha(`merge-${String(mr.iid)}-${mr.sha}`);
       if (body.squash === true) mr.squash_commit_sha = sha(`squash-${String(mr.iid)}`);
       mr.updated_at = this.stamp();
       return { status: 200, body: this.#mrJson(project, mr) };

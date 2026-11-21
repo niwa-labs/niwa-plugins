@@ -52,10 +52,19 @@ export interface GitLabJob {
   pipeline: { id: number };
 }
 
+/**
+ * The commit a merged request left on its base. A squash in a project that merges by merge commit
+ * makes two commits, the squash and the merge on top of it: the merge is what lands. Where the
+ * project merges by fast-forward there is no merge commit and the squash is the one that lands.
+ */
+export function finalShaOf(mr: GitLabMr): string | undefined {
+  return mr.merge_commit_sha ?? mr.squash_commit_sha ?? undefined;
+}
+
 /** The pull request of a merge request. */
 export function pullRequestOf(repo: Repo, mr: GitLabMr): PullRequest {
   const state = mr.state === "opened" ? "open" : mr.state === "merged" ? "merged" : mr.state === "locked" ? "locked" : "closed";
-  const merged = mr.squash_commit_sha ?? mr.merge_commit_sha ?? undefined;
+  const merged = finalShaOf(mr);
   return {
     pr: { repo, number: mr.iid },
     state,

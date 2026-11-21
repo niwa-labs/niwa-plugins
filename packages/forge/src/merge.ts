@@ -18,6 +18,7 @@ import { forgePrMergeCancel } from "./actions.ts";
 import type { MergeOutcome, PendingMerge } from "./actions.ts";
 import { ForgeError } from "./gitlab.ts";
 import type { GitLab } from "./gitlab.ts";
+import { finalShaOf } from "./normalize.ts";
 import type { GitLabMr } from "./normalize.ts";
 import { MergeArmed, MergeDisarmed, MergeRequested, PrClosed, PrMerged } from "./record-types.ts";
 import type { MergeMethod, MergeWhen, PrRef } from "./record-types.ts";
@@ -31,9 +32,9 @@ export function externalIdOf(pr: PrRef): string {
 /** The statuses a server refuses a merge with: not mergeable, a head that moved, nothing to do. */
 const REFUSALS = new Set([405, 406, 409, 422]);
 
-/** The commit a merged pull request left on its base. */
+/** The commit a merged pull request left on its base; the head it was merged at when the server names none. */
 function mergedSha(mr: GitLabMr, expectHead: string): string {
-  return mr.squash_commit_sha ?? mr.merge_commit_sha ?? expectHead;
+  return finalShaOf(mr) ?? expectHead;
 }
 
 export interface MergeAsk {

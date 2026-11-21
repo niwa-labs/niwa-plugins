@@ -5,7 +5,7 @@ import { afterEach, expect, test } from "bun:test";
 
 import type { OperationId } from "@niwa-labs/core";
 
-import { MergeRequested, forgePrMerge, forgePrMergeCancel, forgePrMergePending } from "../src/index.ts";
+import { MergeRequested, forgePrMerge, forgePrMergeCancel, forgePrMergePending, forgePrRead } from "../src/index.ts";
 import { sha } from "./fake-gitlab.ts";
 import { BILLING, forgeHost, openMr } from "./support.ts";
 import type { ForgeHost } from "./support.ts";
@@ -41,8 +41,29 @@ async function check(host: ForgeHost, operation: OperationId) {
 test("a merge at the expected head merges and answers the commit it made", async () => {
   const host = await served();
   const done = await host.niwa.call(forgePrMerge, { ...ask, method: "squash" });
-  expect(done).toEqual({ outcome: "merged", sha: sha("squash-7"), externalId: "gitlab.example.com/acme/billing!7" });
+  expect(done).toEqual({ outcome: "merged", sha: sha(`merge-7-${head}`), externalId: "gitlab.example.com/acme/billing!7" });
   expect(host.server.seen("PUT", /\/merge$/)[0]?.body).toMatchObject({ sha: head, squash: true });
+});
+
+test("a squash in a project that merges by merge commit lands on the merge commit, not on the squash it was made from", async () => {
+  const host = await served();
+  const done = await host.niwa.call(forgePrMerge, { ...ask, method: "squash" });
+  const mr = host.billing.mrs.get(7)!;
+  expect(mr.squash_commit_sha).toBe(sha("squash-7"));
+  expect(mr.merge_commit_sha).not.toBe(mr.squash_commit_sha);
+  expect(done).toMatchObject({ outcome: "merged", sha: mr.merge_commit_sha });
+  const operation = await lastOperation(host);
+  expect(await check(host, operation)).toMatchObject({ status: "completed", value: { sha: mr.merge_commit_sha } });
+  expect(await host.niwa.call(forgePrRead, { repo: BILLING, number: 7 })).toMatchObject({ mergeSha: mr.merge_commit_sha });
+});
+
+test("a squash in a project that merges by fast-forward lands on the squash commit", async () => {
+  const host = await served();
+  host.billing.fastForward = true;
+  const done = await host.niwa.call(forgePrMerge, { ...ask, method: "squash" });
+  expect(done).toMatchObject({ outcome: "merged", sha: sha("squash-7") });
+  expect(await check(host, await lastOperation(host))).toMatchObject({ status: "completed", value: { sha: sha("squash-7") } });
+  expect(await host.niwa.call(forgePrRead, { repo: BILLING, number: 7 })).toMatchObject({ mergeSha: sha("squash-7") });
 });
 
 test("a head that moved is refused by the server and nothing is merged", async () => {
