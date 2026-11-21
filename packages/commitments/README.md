@@ -11,7 +11,8 @@ A plugin for commitments: what was promised, by when, delivery, and whether it w
   still not done after the grace period (an hour by default), it is missed and the agent is told.
 - `commitment.done` and `commitment.cancel` end it: the one who made it or the owner may; only the
   owner cancels a promise made for him. `commitment.list` and `commitment.get` show every one, and
-  each agent's briefing gets a section of its open commitments.
+  each agent's briefing gets a section of its open commitments. In the cockpit every commitment is
+  a card with a cancel button (`./cockpit`).
 
 The deadline is a sleep of `@niwa-labs/timer`, asked through `timer.sleep.request`; the inbox is
 `@niwa-labs/agent`'s, so a host with commitments installs both.

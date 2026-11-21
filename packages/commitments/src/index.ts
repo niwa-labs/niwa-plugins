@@ -21,10 +21,12 @@ import {
 } from "@niwa-labs/core";
 import type { ActionContext, Address, JournalReader, RecordId, Seq, Step, StoredRecord } from "@niwa-labs/core";
 import { AGENT_BRIEFING, agentNotify } from "@niwa-labs/agent/records";
-import { bindingOf, plugin } from "@niwa-labs/plugin";
+import { COCKPIT_MODULE, bindingOf, plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, MessagesOptions, Plugin } from "@niwa-labs/plugin";
 import { REQUEST_TYPES, RequestCancelled, RequestCreated, RequestExpired, fold as foldRequest, requestAsk, requestCancel } from "@niwa-labs/requests/records";
 import { TimerSlept, timerSleepRequest } from "@niwa-labs/timer/records";
+import { fileURLToPath } from "node:url";
+
 import type { z } from "zod";
 
 import {
@@ -172,6 +174,8 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
   const grace = opts.graceMs ?? DEFAULT_GRACE_MS;
   return plugin("commitments", (api) => {
     api.declare(...COMMITMENT_TYPES);
+    // The cards of the commitments in the cockpit: a client module, offered by the path of its source.
+    api.offer(COCKPIT_MODULE, { id: "commitments", entry: fileURLToPath(new URL("./cockpit/index.tsx", import.meta.url)) });
     const journal = () => api.journal?.();
     const ids = new IdIndex("commitment", () =>
       rowsOf(journal())
