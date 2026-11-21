@@ -10,7 +10,9 @@
     "@niwa-labs/core": "*",
     "@niwa-labs/plugin": "*",
     "@niwa-labs/requests": "*",
-    "@niwa-labs/script": "*",
-    "@niwa-labs/workflow": "*"
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@niwa-labs/testing": "*"
   }
 }

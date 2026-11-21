@@ -182,9 +182,12 @@ const OTHER_REPOS_GRAPH: Record<string, PackageSpec> = {
   "@niwa-labs/watch": extraPlugin(),
   "@niwa-labs/evidence": extraPlugin(),
   "@niwa-labs/plan": extraPlugin(),
+  // Memory answers delegate's request for context, whose types live in delegate's records; delegate
+  // never imports memory.
   "@niwa-labs/memory": extraPlugin({
     "@niwa-labs/requests": RECORDS,
     "@niwa-labs/agent": RECORDS,
+    "@niwa-labs/delegate": RECORDS,
     ...SCRIPT_TYPES,
   }),
   "@niwa-labs/commitments": extraPlugin({
