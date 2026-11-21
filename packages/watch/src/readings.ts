@@ -28,6 +28,7 @@ export const SOURCES: readonly string[] = [
   "git.head.moved",
   "workflow.run.*",
   "workflow.scope.*",
+  "niwa.invocation.resolved",
   "niwa.step.intent",
   "niwa.step.outcome",
   "niwa.step.cancelled",
@@ -75,6 +76,9 @@ const ASIDE = /~(auth|now|mark|arm|ended)$/;
 /** The action a sleep records as its step. */
 const WAIT_ACTION = "niwa.wait";
 const InvocationState = z.object({ invocation: Text, state: z.string() });
+const Paused = z.object({ run: Text, choices: z.array(z.string()).optional() });
+const PauseRequested = z.object({ run: Text, kind: z.string().optional() });
+const Continued = z.object({ run: Text, pause: z.string() });
 const RequestMade = z.object({
   id: Text,
   from: z.object({ kind: z.string(), harness: z.string().optional(), id: z.string().optional() }).optional(),
@@ -114,7 +118,10 @@ interface Track {
   invocation?: string;
   started: boolean;
   invocationState?: string;
-  paused: boolean;
+  /** The pause of an error or of a script that cannot go on, until it is answered. */
+  pause?: { readonly cancelOnly: boolean };
+  /** The pause someone asked for, or the deadline that was reached, until the continue that names it. */
+  manual?: { readonly id: string; readonly deadline: boolean };
   /** The shielded scopes that are open, each with the moment a cancel spared it, once one has. */
   shields: Map<string, number | undefined>;
 }
@@ -280,8 +287,14 @@ export class Model {
         const data = OfRun.safeParse(row.data);
         if (!data.success) return;
         const track = this.revive(runSubject(data.data.run), "run", at);
+        // An attempt at the script begins: nothing of the one before holds.
+        this.release(track);
         track.base = "idle";
         track.started = false;
+        track.pause = undefined;
+        track.manual = undefined;
+        track.streak = undefined;
+        track.shields.clear();
         return;
       }
       case "workflow.run.started": {
@@ -290,7 +303,8 @@ export class Model {
         const track = this.revive(runSubject(data.data.run), "run", at);
         track.started = true;
         this.become(track, "working", at);
-        if (row.actor.kind === "handler") {
+        if (row.actor.kind === "handler" && track.invocation !== (row.actor.invocation as string)) {
+          this.release(track);
           track.invocation = row.actor.invocation as string;
           this.byInvocation.set(track.invocation, track.subject);
         }
@@ -302,16 +316,27 @@ export class Model {
         return;
       }
       case "workflow.run.paused": {
-        const track = this.runOf(row.data);
-        if (track === undefined) return;
-        track.paused = true;
+        const data = Paused.safeParse(row.data);
+        const track = data.success ? this.attemptOf(row, data.data.run) : undefined;
+        if (track === undefined || !data.success) return;
+        track.pause = { cancelOnly: data.data.choices?.join() === "cancel" };
+        track.last = at;
+        return;
+      }
+      case "workflow.run.pause-requested": {
+        const data = PauseRequested.safeParse(row.data);
+        const track = data.success ? this.tracks.get(runSubject(data.data.run)) : undefined;
+        if (track === undefined || !data.success) return;
+        track.manual = { id: String(row.id), deadline: data.data.kind === "deadline" };
         track.last = at;
         return;
       }
       case "workflow.run.continued": {
-        const track = this.runOf(row.data);
-        if (track === undefined) return;
-        track.paused = false;
+        const data = Continued.safeParse(row.data);
+        const track = data.success ? this.tracks.get(runSubject(data.data.run)) : undefined;
+        if (track === undefined || !data.success) return;
+        // It frees the pause it names: a hold shares the record, and a later pause is not the one that was released.
+        if (track.manual?.id === data.data.pause) track.manual = undefined;
         track.last = at;
         return;
       }
@@ -366,6 +391,18 @@ export class Model {
         const track = data.success ? this.ofInvocation(data.data.invocation) : undefined;
         if (track === undefined || !data.success) return;
         track.invocationState = data.data.state;
+        track.last = at;
+        if (data.data.state === "running") track.pause = undefined;
+        // An invocation that is done is the end of the run, unless the run waits for its script to be revised.
+        if (data.data.state === "done" && track.pause?.cancelOnly !== true) this.end(track.subject);
+        return;
+      }
+      case "niwa.invocation.resolved": {
+        const data = OfInvocation.safeParse(row.data);
+        const track = data.success ? this.ofInvocation(data.data.invocation) : undefined;
+        if (track === undefined) return;
+        // A retry, a skip or a cancel answers the pause of the invocation.
+        track.pause = undefined;
         track.last = at;
         return;
       }
@@ -480,7 +517,10 @@ export class Model {
     const asked = [...this.requests.values()].includes(track.subject);
     if (track.kind === "session") return asked && track.base !== "unknown" ? "waiting-human" : undefined;
     if (!track.started) return track.base === "idle" ? "idle" : undefined;
-    if (track.paused || track.invocationState === "paused") return "waiting-human";
+    // A deadline that was reached pauses the run from that moment; a pause someone asked for, when the run reaches a boundary.
+    if (track.manual?.deadline === true) return "waiting-human";
+    if (track.pause !== undefined || track.invocationState === "paused") return "waiting-human";
+    if (track.manual !== undefined && track.invocationState === "waiting") return "waiting-human";
     if (track.invocationState !== "waiting") return undefined;
     if (asked) return "waiting-human";
     if ([...this.sleeps.values()].includes(track.subject)) return "sleeping";
@@ -489,7 +529,7 @@ export class Model {
 
   private create(subject: Subject, kind: Track["kind"], at: number): Track | undefined {
     if (this.gone.has(subject)) return undefined;
-    const track: Track = { subject, kind, base: "idle", managed: false, since: at, last: at, started: kind === "session", paused: false, shields: new Map() };
+    const track: Track = { subject, kind, base: "idle", managed: false, since: at, last: at, started: kind === "session", shields: new Map() };
     this.tracks.set(subject, track);
     return track;
   }
@@ -507,14 +547,25 @@ export class Model {
     return this.tracks.get(subject);
   }
 
-  private runOf(data: unknown): Track | undefined {
-    const parsed = OfRun.safeParse(data);
-    return parsed.success ? this.tracks.get(runSubject(parsed.data.run)) : undefined;
+  /** The track of the run a record is about, unless an invocation other than the run's current one wrote it. */
+  private attemptOf(row: StoredRecord, run: string): Track | undefined {
+    const track = this.tracks.get(runSubject(run));
+    if (track === undefined) return undefined;
+    if (row.actor.kind === "handler" && track.invocation !== undefined && (row.actor.invocation as string) !== track.invocation) return undefined;
+    return track;
   }
 
   private ofInvocation(invocation: string): Track | undefined {
     const subject = this.byInvocation.get(invocation);
-    return subject === undefined ? undefined : this.tracks.get(subject);
+    const track = subject === undefined ? undefined : this.tracks.get(subject);
+    return track?.invocation === invocation ? track : undefined;
+  }
+
+  /** The invocation a run was in is over for it: what it said is not read for the run any more. */
+  private release(track: Track): void {
+    if (track.invocation !== undefined) this.byInvocation.delete(track.invocation);
+    track.invocation = undefined;
+    track.invocationState = undefined;
   }
 
   /** The run whose handler wrote a record, when one did. */

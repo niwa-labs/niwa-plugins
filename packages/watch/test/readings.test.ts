@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { recordId, recordTypeName, seq, streamId, timestamp } from "@niwa-labs/core";
+import { recordId, recordTypeName, resolveQuery, selectsType, seq, streamId, timestamp } from "@niwa-labs/core";
 import type { Caller, StoredRecord } from "@niwa-labs/core";
 
-import { DEFAULT_SETTINGS, Model, transitions } from "../src/readings.ts";
+import { DEFAULT_SETTINGS, Model, SOURCES, transitions } from "../src/readings.ts";
 import type { OpenFlag, Settings, Transition } from "../src/readings.ts";
 import { runSubject, sessionSubject } from "../src/records.ts";
 import type { Reading } from "../src/records.ts";
@@ -228,11 +228,64 @@ describe("runs", () => {
     expect(model.readingOf(run, 122 * MINUTE)).toMatchObject({ state: "working" });
   });
 
-  test("a paused run waits for a person until it is continued", () => {
-    const model = modelOf([...started(), row("workflow.run.paused", { run: "run-1", reason: "a step failed" }, MINUTE)]);
+  const state = (value: string, at: number, invocation = "inv-1") => row("niwa.invocation.state", { invocation, state: value }, at);
+  const resolved = (at: number, choice = "retry") => row("niwa.invocation.resolved", { invocation: "inv-1", key: "a", choice }, at);
+
+  test("a run paused on an error waits for a person until the answer, whichever it is", () => {
+    const paused = [...started(), row("workflow.run.paused", { run: "run-1", reason: "a step failed", key: "a", choices: ["retry", "skip", "cancel"] }, MINUTE, inv), state("paused", MINUTE)];
+    const model = modelOf(paused);
     expect(model.readingOf(run, 60 * MINUTE)).toMatchObject({ state: "waiting-human" });
-    model.apply(row("workflow.run.continued", { run: "run-1", pause: "p" }, 61 * MINUTE));
+    // A retry or a skip is an answer of the core; no `workflow.run.continued` comes with it.
+    model.apply(resolved(61 * MINUTE));
+    model.apply(state("running", 61 * MINUTE));
     expect(model.readingOf(run, 62 * MINUTE)).toMatchObject({ state: "working" });
+  });
+
+  test("a run cancelled from a pause is over, and one that waits for its script to be revised is not", () => {
+    const failed = [...started(), row("workflow.run.paused", { run: "run-1", reason: "a step failed", key: "a", choices: ["retry", "skip", "cancel"] }, MINUTE, inv), state("paused", MINUTE)];
+    const cancelled = modelOf([...failed, resolved(2 * MINUTE, "cancel"), state("done", 2 * MINUTE)]);
+    expect(cancelled.readings(3 * MINUTE)).toEqual([]);
+
+    const edited = modelOf([...started(), row("workflow.run.paused", { run: "run-1", reason: "the script was edited", choices: ["cancel"] }, MINUTE, inv), state("done", MINUTE)]);
+    expect(edited.readingOf(run, 60 * MINUTE)).toMatchObject({ state: "waiting-human" });
+  });
+
+  test("a revised run starts clean: the pause of the attempt before does not carry over", () => {
+    const model = modelOf([...started(), row("workflow.run.paused", { run: "run-1", reason: "the script was edited", choices: ["cancel"] }, MINUTE, inv), state("done", MINUTE)]);
+    model.apply(row("workflow.run.requested", { run: "run-1", file: "f.ts" }, 2 * MINUTE));
+    expect(model.readingOf(run, 3 * MINUTE)).toMatchObject({ state: "idle" });
+    const next = handler("inv-2");
+    model.apply(row("workflow.run.started", { run: "run-1", file: "f.ts" }, 4 * MINUTE, next));
+    expect(model.readingOf(run, 5 * MINUTE)).toMatchObject({ state: "working" });
+    // What the first attempt's invocation writes afterwards is not the new attempt's.
+    model.apply(state("paused", 6 * MINUTE));
+    model.apply(row("workflow.run.paused", { run: "run-1", reason: "late" }, 6 * MINUTE, inv));
+    expect(model.readingOf(run, 7 * MINUTE)).toMatchObject({ state: "working" });
+  });
+
+  test("a pause someone asked for holds the run at its next boundary, and only the matching continue releases it", () => {
+    const begun = [...started(), intent("a", 1, 30_000)];
+    const pause = row("workflow.run.pause-requested", { run: "run-1" }, MINUTE);
+    const model = modelOf([...begun, pause]);
+    // Not yet at a boundary: the run goes on.
+    expect(model.readingOf(run, 2 * MINUTE)).toMatchObject({ state: "working" });
+    model.apply(state("waiting", 3 * MINUTE));
+    expect(model.readingOf(run, 60 * MINUTE)).toMatchObject({ state: "waiting-human" });
+    // Another pause's release (a hold shares the record) does not free it.
+    model.apply(row("workflow.run.continued", { run: "run-1", pause: "some-hold" }, 4 * MINUTE));
+    expect(model.readingOf(run, 60 * MINUTE)).toMatchObject({ state: "waiting-human" });
+    model.apply(row("workflow.run.continued", { run: "run-1", pause: String(pause.id) }, 5 * MINUTE));
+    model.apply(state("running", 5 * MINUTE));
+    expect(model.readingOf(run, 6 * MINUTE)).toMatchObject({ state: "working" });
+  });
+
+  test("a run that reached its deadline waits for a person from the moment it says so, until it is extended", () => {
+    const begun = started();
+    const pause = row("workflow.run.pause-requested", { run: "run-1", kind: "deadline", deadline: MINUTE }, MINUTE);
+    const model = modelOf([...begun, pause]);
+    expect(model.readingOf(run, 2 * MINUTE)).toMatchObject({ state: "waiting-human" });
+    model.apply(row("workflow.run.continued", { run: "run-1", pause: String(pause.id) }, 3 * MINUTE));
+    expect(model.readingOf(run, 4 * MINUTE)).toMatchObject({ state: "working" });
   });
 
   test("the same step six times in a row is a loop; another step or a moved head ends it", () => {
@@ -376,5 +429,25 @@ describe("flags and transitions", () => {
       row("watch.recovered", { subject: me, since: 10, kind: "silent" }, 31),
     ]);
     expect([...model.flags().values()]).toEqual([{ since: 30, last: 25, kind: "silent" }]);
+  });
+});
+
+describe("what the service reads", () => {
+  test("the sources hold every record type the model reads", () => {
+    const query = resolveQuery({ types: SOURCES });
+    for (const type of [
+      "session.activity",
+      "history.session.unwatched",
+      "workflow.run.pause-requested",
+      "workflow.run.continued",
+      "workflow.run.log",
+      "niwa.invocation.state",
+      "niwa.invocation.resolved",
+      "niwa.step.intent",
+      "niwa.step.outcome",
+      "niwa.step.cancelled",
+    ]) {
+      expect(selectsType(query, type), type).toBe(true);
+    }
   });
 });
