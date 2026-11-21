@@ -144,6 +144,46 @@ describe("sessions", () => {
   });
 });
 
+describe("sessions the history also follows", () => {
+  const named = { harness: "claude", native: "abc" };
+  const managed = (at = 0) => [row("session.started", { session: ME, id: "s-1" }, 0), row("session.turn-started", { session: ME, turn: 1 }, at)];
+
+  test("a pause of the transcript does not make a turn niwa runs idle: a hung turn goes on to be stuck", () => {
+    const model = modelOf([...managed(), row("history.session.seen", { session: named, harness: "claude" }, 1000), row("history.session.paused", { session: named, upto: "x", why: "idle" }, MINUTE)]);
+    expect(read(model, me, 5 * MINUTE)).toMatchObject({ state: "working", since: 0 });
+    expect(read(model, me, 10 * MINUTE)).toMatchObject({ state: "stuck", kind: "silent", since: 10 * MINUTE });
+  });
+
+  test("a guessed end from the history does not end a session niwa runs; an exact one does", () => {
+    const model = modelOf([...managed(), row("history.session.ended", { session: named, certainty: "guessed", why: "idle" }, MINUTE)]);
+    expect(read(model, me, 2 * MINUTE)).toMatchObject({ state: "working" });
+    model.apply(row("history.session.ended", { session: named, certainty: "exact", why: "session-ended" }, 3 * MINUTE));
+    expect(read(model, me, 4 * MINUTE)).toBeUndefined();
+  });
+
+  test("a session only the history follows is not followed once it is unwatched, and its flag is closed", () => {
+    const other = { harness: "codex", native: "x1" };
+    const subject = sessionSubject("codex", "x1");
+    const model = modelOf([
+      row("history.session.seen", { session: other, harness: "codex" }, 0),
+      row("session.progress", { session: other, done: 1, total: 3 }, MINUTE),
+      row("watch.stuck", { subject, since: 11 * MINUTE, last: MINUTE, kind: "silent" }, 11 * MINUTE),
+      row("history.session.unwatched", { session: other }, 12 * MINUTE),
+    ]);
+    expect(read(model, subject, 60 * MINUTE)).toBeUndefined();
+    expect(transitions(model.flags(), model.readings(60 * MINUTE)).map((one) => one.type)).toEqual(["recovered"]);
+    // A sign from it afterwards does not bring it back.
+    model.apply(row("session.progress", { session: other, done: 2, total: 3 }, 13 * MINUTE));
+    expect(model.readings(14 * MINUTE)).toEqual([]);
+  });
+
+  test("a session niwa runs is still watched by its own records after the history stops watching it", () => {
+    const model = modelOf([...managed(), row("history.session.unwatched", { session: named }, MINUTE)]);
+    expect(read(model, me, 2 * MINUTE)).toMatchObject({ state: "working" });
+    expect(read(model, me, 10 * MINUTE)).toMatchObject({ state: "stuck", kind: "silent" });
+  });
+});
+
 describe("runs", () => {
   const run = runSubject("run-1");
   const inv = handler("inv-1");

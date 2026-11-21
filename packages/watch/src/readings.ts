@@ -63,6 +63,7 @@ const SessionNamed = z.union([Text, SessionObject]);
 const OfSession = z.object({ session: SessionNamed });
 const Started = z.object({ session: SessionNamed, stuckAfter: z.number().positive().optional() });
 const TurnEnded = z.object({ session: SessionNamed, how: z.string().optional() });
+const HistoryEnded = z.object({ session: SessionNamed, certainty: z.string().optional() });
 const Activity = z.object({ session: SessionNamed, tool: z.string().optional(), permission: z.unknown().optional() });
 const OfRun = z.object({ run: Text });
 const Scope = z.object({ run: Text, scope: Text, shield: z.boolean().optional() });
@@ -99,6 +100,8 @@ interface Track {
   readonly subject: Subject;
   readonly kind: "session" | "run";
   base: Base;
+  /** Whether niwa runs the session and says its turns itself; a session only the history follows is not. */
+  managed: boolean;
   since: number;
   last: number;
   stuckAfter?: number;
@@ -166,6 +169,7 @@ export class Model {
         const data = Started.safeParse(row.data);
         if (!data.success) return;
         const track = this.revive(sessionSubjectOf(data.data.session), "session", at);
+        track.managed = true;
         track.base = "idle";
         track.since = at;
         track.last = at;
@@ -176,6 +180,7 @@ export class Model {
         const data = OfSession.safeParse(row.data);
         if (!data.success) return;
         const track = this.revive(sessionSubjectOf(data.data.session), "session", at);
+        track.managed = true;
         this.become(track, "working", at);
         track.streak = undefined;
         return;
@@ -210,10 +215,27 @@ export class Model {
         track.streak = undefined;
         return;
       }
-      case "session.ended":
-      case "history.session.ended": {
+      case "session.ended": {
         const data = OfSession.safeParse(row.data);
         if (data.success) this.end(sessionSubjectOf(data.data.session));
+        return;
+      }
+      case "history.session.ended": {
+        const data = HistoryEnded.safeParse(row.data);
+        if (!data.success) return;
+        const subject = sessionSubjectOf(data.data.session);
+        // A quiet transcript only suggests that a session niwa runs is over: it says so itself.
+        if (this.tracks.get(subject)?.managed === true && data.data.certainty !== "exact") return;
+        this.end(subject);
+        return;
+      }
+      case "history.session.unwatched": {
+        const data = OfSession.safeParse(row.data);
+        if (!data.success) return;
+        const subject = sessionSubjectOf(data.data.session);
+        // The history was the only source of a session niwa does not run: with it gone there is nothing to measure.
+        // A session niwa runs goes on being read from its own records.
+        if (this.tracks.get(subject)?.managed === false) this.end(subject);
         return;
       }
       case "history.session.seen": {
@@ -228,7 +250,8 @@ export class Model {
         const data = OfSession.safeParse(row.data);
         if (!data.success) return;
         const track = this.known(sessionSubjectOf(data.data.session));
-        if (track === undefined) return;
+        // A quiet transcript says nothing of a turn niwa runs: the turn is open until it ends.
+        if (track === undefined || track.managed) return;
         this.become(track, "idle", at);
         track.streak = undefined;
         return;
@@ -457,7 +480,7 @@ export class Model {
 
   private create(subject: Subject, kind: Track["kind"], at: number): Track | undefined {
     if (this.gone.has(subject)) return undefined;
-    const track: Track = { subject, kind, base: "idle", since: at, last: at, started: kind === "session", paused: false, shields: new Map() };
+    const track: Track = { subject, kind, base: "idle", managed: false, since: at, last: at, started: kind === "session", paused: false, shields: new Map() };
     this.tracks.set(subject, track);
     return track;
   }
