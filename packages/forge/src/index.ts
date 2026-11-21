@@ -59,7 +59,7 @@ import { ForgeError } from "./gitlab.ts";
 import type { FetchLike, GitLab } from "./gitlab.ts";
 import { cancelMerge, checkMerge, merge, pendingMerges } from "./merge.ts";
 import { checksOf, lookupsOf, pipelineOf, pullRequestOf, runStateOf } from "./normalize.ts";
-import { DEFAULT_INTERVALS, Poller, sync } from "./observe.ts";
+import { DEFAULT_INTERVALS, Poller, Seen, sync } from "./observe.ts";
 import type { PollIntervals } from "./observe.ts";
 import { observedPrs } from "./prs.ts";
 import type { GitLabJob, GitLabMr, GitLabPipeline } from "./normalize.ts";
@@ -151,6 +151,8 @@ export function forge(options: ForgeOptions): Plugin {
       poller.touch(repoKey(name), Date.now());
       return servers.repo(name, journal());
     };
+    /** What each repository's records hold, kept from pass to pass: a pass takes only what was written since. */
+    const projections = new Map<string, Seen>();
     /** One pass over a watched repository at a time, so a version is never claimed twice. */
     const passes = new Map<string, Promise<number>>();
     const pass = (key: string): Promise<number> => {
@@ -163,7 +165,9 @@ export function forge(options: ForgeOptions): Plugin {
         .then(() => {
           const now = journal();
           if (now === undefined) throw new ForgeError("not-watched", "the host is not serving");
-          return sync({ gitlab: gitlab(watched.repo.host), journal: now, emit: (type, data, opts) => api.emit(type, data, opts) }, watched.repo, watched.since);
+          const seen = projections.get(key) ?? new Seen(watched.repo);
+          projections.set(key, seen);
+          return sync({ gitlab: gitlab(watched.repo.host), journal: now, emit: (type, data, opts) => api.emit(type, data, opts), seen }, watched.repo, watched.since);
         });
       passes.set(key, next);
       return next.finally(() => {

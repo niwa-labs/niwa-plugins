@@ -23,6 +23,7 @@ import {
   forgeRepoWatch,
   pollInterval,
 } from "../src/index.ts";
+import { Seen } from "../src/observe.ts";
 import { sha } from "./fake-gitlab.ts";
 import { BILLING, forgeHost, openMr } from "./support.ts";
 import type { ForgeHost } from "./support.ts";
@@ -186,6 +187,33 @@ test("the checks of a pull request follow the pipelines of its head", async () =
     [sha("topic-1"), "green", "pending"],
     [sha("topic-2"), "none", "green"],
   ]);
+});
+
+test("a projection takes from the journal only what it gained since the last time, and records of other repositories are not its own", () => {
+  const repo = { ...BILLING, projectId: 42 };
+  const stored: Array<{ seq: number; type: string; data: unknown }> = [];
+  const add = (type: string, data: unknown) => stored.push({ seq: stored.length + 1, type, data });
+  let returned = 0;
+  const journal = {
+    since: (from: number, types?: string[]) => {
+      const found = stored.filter((one) => one.seq > Number(from) && (types === undefined || types.includes(one.type)));
+      returned += found.length;
+      return found;
+    },
+  } as unknown as Parameters<Seen["absorb"]>[0];
+  const opened = (number: number, project: number) => ({ pr: { repo: { ...repo, projectId: project }, number }, title: "t", branch: "b", base: "main", source: { kind: "event", id: number } });
+  add("forge.pr.opened", opened(1, 42));
+  add("forge.pr.opened", opened(2, 43));
+  const seen = new Seen(repo);
+  seen.absorb(journal);
+  expect([...seen.opened]).toEqual([1]);
+  expect(returned).toBe(2);
+  seen.absorb(journal);
+  expect(returned).toBe(2);
+  add("forge.pr.opened", opened(3, 42));
+  seen.absorb(journal);
+  expect([...seen.opened]).toEqual([1, 3]);
+  expect(returned).toBe(3);
 });
 
 test("a repository that is not watched is not polled", async () => {

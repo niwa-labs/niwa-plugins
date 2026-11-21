@@ -62,6 +62,8 @@ export interface SyncPlace {
   readonly gitlab: GitLab;
   readonly journal: JournalReader;
   readonly emit: Emit;
+  /** What was absorbed of the repository's records in earlier passes. Default: nothing, read afresh. */
+  readonly seen?: Seen;
 }
 
 const NULL_SHA = /^0+$/;
@@ -79,8 +81,16 @@ function digestOf(text: string): string {
   return `sha256:${createHash("sha256").update(text).digest("hex")}`;
 }
 
-/** What the journal holds of one repository, read once per pass. */
-class Seen {
+const SEEN_TYPES = [Pushed, PrOpened, PrUpdated, PrHead, PrReview, PrComment, PrMerged, PrClosed, PipelineObserved, JobObserved, ChecksObserved];
+
+/**
+ * What the journal holds of one repository: a projection kept from pass to pass, so that a pass does
+ * not read the whole history of the host again. It changes only by absorbing the records the journal
+ * gained since the last one it took, so a record is never counted twice.
+ */
+export class Seen {
+  /** The position of the last record absorbed. */
+  #upto = 0;
   /** The highest event id written. */
   lastEvent = 0;
   /** The pull requests whose opening, merge or close is written. */
@@ -95,11 +105,19 @@ class Seen {
   readonly pipelines = new Map<number, { state: RunState; version: number }>();
   readonly jobs = new Map<number, { state: RunState; version: number }>();
 
-  constructor(journal: JournalReader, repo: Repo) {
+  readonly #repo: Repo;
+
+  constructor(repo: Repo) {
+    this.#repo = repo;
+  }
+
+  /** Take the records the journal gained since the last absorbed one. */
+  absorb(journal: JournalReader): void {
+    const repo = this.#repo;
     const ours = (data: { repo?: Repo; pr?: PrRef }) => (data.repo ?? data.pr?.repo)?.projectId === repo.projectId && (data.repo ?? data.pr?.repo)?.host === repo.host;
-    const types = [Pushed, PrOpened, PrUpdated, PrHead, PrReview, PrComment, PrMerged, PrClosed, PipelineObserved, JobObserved, ChecksObserved];
-    const byName = new Map<string, RecordType<any>>(types.map((type) => [type.name, type]));
-    for (const stored of journal.since(seq(0), types.map((type) => type.name))) {
+    const byName = new Map<string, RecordType<any>>(SEEN_TYPES.map((type) => [type.name, type]));
+    for (const stored of journal.since(seq(this.#upto), SEEN_TYPES.map((type) => type.name))) {
+      this.#upto = Number(stored.seq);
       const type = byName.get(stored.type);
       const parsed = type?.schema.safeParse(stored.data);
       if (parsed === undefined || !parsed.success) continue;
@@ -149,12 +167,14 @@ class Seen {
  */
 export async function sync(place: SyncPlace, repo: Repo, since = 0): Promise<number> {
   const { gitlab } = place;
-  const seen = new Seen(place.journal, repo);
+  const seen = place.seen ?? new Seen(repo);
+  seen.absorb(place.journal);
   let written = 0;
   const write = async <T>(type: RecordType<T>, data: T, id: string): Promise<void> => {
     try {
       await place.emit(type, data, { id });
       written += 1;
+      seen.absorb(place.journal);
     } catch (error) {
       // The same id with other content: a pass that was cut off wrote this version already.
       if (!(error instanceof IntegrityError)) throw error;
@@ -226,14 +246,11 @@ export async function sync(place: SyncPlace, repo: Repo, since = 0): Promise<num
     if (mr === undefined) continue;
     if (event.action_name === "opened") {
       await write(PrOpened, { pr: pr(number), title: mr.title, branch: mr.source_branch, base: mr.target_branch, ...(author === undefined ? {} : { author }), source }, id);
-      seen.opened.add(number);
     } else if (event.action_name === "accepted") {
       const made = pullRequestOf(repo, mr);
       await write(PrMerged, { pr: pr(number), base: mr.target_branch, head: mr.sha, ...(made.mergeSha === undefined ? {} : { mergeSha: made.mergeSha }), ...(author === undefined ? {} : { by: author }), source }, id);
-      seen.merged.add(number);
     } else {
       await write(PrClosed, { pr: pr(number), ...(author === undefined ? {} : { by: author }), source }, id);
-      seen.closed.add(number);
     }
   }
 
