@@ -51,10 +51,12 @@ import {
   forgePrRetarget,
   forgePushConfig,
   forgeRepoList,
+  forgeRepoStatus,
   forgeRepoSync,
   forgeRepoUnwatch,
   forgeRepoWatch,
 } from "./actions.ts";
+import type { RepoStatus } from "./actions.ts";
 import { ForgeError } from "./gitlab.ts";
 import type { FetchLike, GitLab } from "./gitlab.ts";
 import { cancelMerge, checkMerge, merge, pendingMerges } from "./merge.ts";
@@ -153,6 +155,8 @@ export function forge(options: ForgeOptions): Plugin {
     };
     /** What each repository's records hold, kept from pass to pass: a pass takes only what was written since. */
     const projections = new Map<string, Seen>();
+    /** How the polls of each repository have gone since the host started, by `<host>/<path>`. */
+    const statuses = new Map<string, Omit<RepoStatus, "repo">>();
     /** One pass over a watched repository at a time, so a version is never claimed twice. */
     const passes = new Map<string, Promise<number>>();
     const pass = (key: string): Promise<number> => {
@@ -160,6 +164,7 @@ export function forge(options: ForgeOptions): Plugin {
       const reader = journal();
       if (watched === undefined || reader === undefined) return Promise.reject(new ForgeError("not-watched", `${key} is not watched`));
       const before = passes.get(key) ?? Promise.resolve(0);
+      let missed = false;
       const next = before
         .catch(() => 0)
         .then(() => {
@@ -167,8 +172,23 @@ export function forge(options: ForgeOptions): Plugin {
           if (now === undefined) throw new ForgeError("not-watched", "the host is not serving");
           const seen = projections.get(key) ?? new Seen(watched.repo);
           projections.set(key, seen);
-          return sync({ gitlab: gitlab(watched.repo.host), journal: now, emit: (type, data, opts) => api.emit(type, data, opts), seen }, watched.repo, watched.since);
-        });
+          return sync(
+            { gitlab: gitlab(watched.repo.host), journal: now, emit: (type, data, opts) => api.emit(type, data, opts), seen, gap: () => (missed = true) },
+            watched.repo,
+            watched.since,
+          );
+        })
+        .then(
+          (written) => {
+            const at = Date.now();
+            statuses.set(key, { lastPassAt: at, lastOkAt: at, ...(missed ? { eventsMissed: true } : {}) });
+            return written;
+          },
+          (error: unknown) => {
+            statuses.set(key, { ...statuses.get(key), lastPassAt: Date.now(), lastError: error instanceof Error ? error.message : String(error) });
+            throw error;
+          },
+        );
       passes.set(key, next);
       return next.finally(() => {
         if (passes.get(key) === next) passes.delete(key);
@@ -262,6 +282,19 @@ export function forge(options: ForgeOptions): Plugin {
           poller.passed(key, Date.now(), written);
           return { written };
         },
+      }),
+    );
+
+    api.action(
+      action(forgeRepoStatus, {
+        recovery: "repeat",
+        effect: "read",
+        world: "niwa",
+        run: (input) => ({
+          items: [...watching(journal())]
+            .filter(([key]) => input.repo === undefined || key === repoKey(input.repo))
+            .map(([key, one]) => ({ repo: one.repo, ...statuses.get(key) })),
+        }),
       }),
     );
 

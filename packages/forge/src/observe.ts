@@ -64,9 +64,16 @@ export interface SyncPlace {
   readonly emit: Emit;
   /** What was absorbed of the repository's records in earlier passes. Default: nothing, read afresh. */
   readonly seen?: Seen;
+  /** Called when the event log was read only down to a bound, so events older than the oldest read were not seen. */
+  readonly gap?: () => void;
+  /** How many pages of the event log one pass reads at most. Default: 100, which is 10000 events. */
+  readonly eventPages?: number;
 }
 
 const NULL_SHA = /^0+$/;
+
+/** How many pages of the event log a pass reads at most. */
+const EVENT_PAGES = 100;
 
 /** The states of a pipeline that has not ended and is not waiting for a person: its jobs still move. */
 const ACTIVE = new Set<RunState>(["created", "waiting_for_resource", "preparing", "pending", "running", "scheduled"]);
@@ -201,9 +208,11 @@ export async function sync(place: SyncPlace, repo: Repo, since = 0): Promise<num
 
   // The event log, newest first until an event the journal holds, then written oldest first.
   const after = Math.max(seen.lastEvent, since);
-  const events = (await gitlab.list<GitLabEvent>(projectPath(repo, "/events"), { sort: "desc" }, (page) => page.some((event) => event.id <= after)))
-    .filter((event) => event.id > after)
-    .sort((a, b) => a.id - b.id);
+  const read = await gitlab.pages<GitLabEvent>(projectPath(repo, "/events"), { sort: "desc" }, { enough: (page) => page.some((event) => event.id <= after), maxPages: place.eventPages ?? EVENT_PAGES });
+  // The log cannot be asked for from an id: past the bound what lay between the last event the journal
+  // holds and the oldest one read is out of reach. What was read is written, and the gap is reported.
+  if (read.truncated) place.gap?.();
+  const events = read.items.filter((event) => event.id > after).sort((a, b) => a.id - b.id);
   for (const event of events) {
     const source: Source = { kind: "event", id: event.id };
     const id = idOf(repo, `event:${String(event.id)}`);

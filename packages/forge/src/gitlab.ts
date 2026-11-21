@@ -99,16 +99,26 @@ export class GitLab {
    * of which it says the rest is not needed.
    */
   async list<T>(path: string, query: Query = {}, enough?: (page: readonly T[]) => boolean): Promise<T[]> {
+    return (await this.pages<T>(path, query, enough === undefined ? {} : { enough })).items;
+  }
+
+  /**
+   * The same, with the bound given, and the answer says whether the list was cut by it: `truncated`
+   * is true when the server had a page more that was not read and `enough` had not asked to stop.
+   */
+  async pages<T>(path: string, query: Query = {}, opts: { enough?: (page: readonly T[]) => boolean; maxPages?: number } = {}): Promise<{ items: T[]; truncated: boolean }> {
     const items: T[] = [];
+    const bound = opts.maxPages ?? MAX_PAGES;
     let page: string | undefined = "1";
-    for (let read = 0; page !== undefined && read < MAX_PAGES; read += 1) {
+    for (let read = 0; page !== undefined; read += 1) {
+      if (read >= bound) return { items, truncated: true };
       const answer: Cached = await this.#read(this.#url(path, { per_page: 100, ...query, page }));
       const got = answer.body as T[];
       items.push(...got);
-      if (enough?.(got) === true) break;
+      if (opts.enough?.(got) === true) break;
       page = answer.next;
     }
-    return items;
+    return { items, truncated: false };
   }
 
   /**

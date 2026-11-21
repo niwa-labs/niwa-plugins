@@ -80,6 +80,29 @@ export const forgeRepoSync = actionRef("forge.repo.sync", {
   target: (input) => repoTarget(input.repo),
 });
 
+/** How the polls of one watched repository have gone since the host started. */
+export const RepoStatus = z.strictObject({
+  repo: Repo,
+  /** When the last pass ended, in milliseconds since the epoch; absent before the first pass. */
+  lastPassAt: z.number().int().nonnegative().optional(),
+  /** When a pass last ended without an error: a pass that found nothing new counts. */
+  lastOkAt: z.number().int().nonnegative().optional(),
+  /** What the last pass failed with, while it did: a lost token, a spent limit, a server that is down. */
+  lastError: z.string().optional(),
+  /** True when the last pass could not read the event log back to the last event it had: older events were not seen. */
+  eventsMissed: z.boolean().optional(),
+});
+export type RepoStatus = z.infer<typeof RepoStatus>;
+
+export const forgeRepoStatus = actionRef("forge.repo.status", {
+  description:
+    "How the polls of the watched repositories have gone since the host started: when the last pass ended, when one last " +
+    "ended without an error, what the last one failed with, and whether the event log was read back far enough. " +
+    "Silence from a repository means nothing happened there only while `lastError` is absent.",
+  input: z.strictObject({ repo: RepoName.optional() }),
+  output: z.strictObject({ items: z.array(RepoStatus) }),
+});
+
 // --- Reads --------------------------------------------------------------------------------------
 
 export const forgePrRead = actionRef("forge.pr.read", {

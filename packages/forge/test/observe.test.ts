@@ -3,6 +3,8 @@
 
 import { afterEach, expect, test } from "bun:test";
 
+import type { JournalReader } from "@niwa-labs/core";
+
 import { setTimeout as sleep } from "node:timers/promises";
 
 import {
@@ -21,12 +23,15 @@ import {
   forgePrList,
   forgePrMerge,
   forgePrMergePending,
+  forgeRepoStatus,
   forgeRepoSync,
   forgeRepoWatch,
   pollInterval,
 } from "../src/index.ts";
-import { Seen } from "../src/observe.ts";
-import { sha } from "./fake-gitlab.ts";
+import { GitLab } from "../src/gitlab.ts";
+import { Seen, sync } from "../src/observe.ts";
+import type { Emit } from "../src/observe.ts";
+import { FakeGitLab, sha } from "./fake-gitlab.ts";
 import { BILLING, forgeHost, openMr } from "./support.ts";
 import type { ForgeHost } from "./support.ts";
 
@@ -274,6 +279,54 @@ test("a projection takes from the journal only what it gained since the last tim
   seen.absorb(journal);
   expect([...seen.life.keys()]).toEqual([1, 3]);
   expect(returned).toBe(3);
+});
+
+test("an event log of more than 2000 new events is written whole, oldest first, and the next poll finds nothing missing", async () => {
+  const host = await watched();
+  for (let at = 0; at < 2100; at += 1) {
+    host.server.event(host.billing, { action_name: "pushed to", push_data: { ref: "main", ref_type: "branch", commit_from: sha(`from-${String(at)}`), commit_to: sha(`to-${String(at)}`) } });
+  }
+  expect((await syncNow(host)).written).toBe(2100);
+  expect(await syncNow(host)).toEqual({ written: 0 });
+  expect((await host.niwa.call(forgeRepoStatus, {})).items[0]).not.toHaveProperty("eventsMissed");
+}, 30_000);
+
+test("a log read down to its bound says that what lay beyond it was not seen, and writes what it read", async () => {
+  const server = new FakeGitLab();
+  const project = server.project(42, "acme/billing");
+  const repo = { ...BILLING, projectId: 42 };
+  for (let at = 0; at < 250; at += 1) server.event(project, { action_name: "pushed to", push_data: { ref: "main", ref_type: "branch", commit_from: null, commit_to: sha(`to-${String(at)}`) } });
+  const stored: Array<{ seq: number; type: string; data: unknown; id: string }> = [];
+  const journal = { since: (from: number, types?: string[]) => stored.filter((one) => one.seq > Number(from) && (types === undefined || types.includes(one.type))) } as unknown as JournalReader;
+  const emit: Emit = async (type, data, opts) => {
+    stored.push({ seq: stored.length + 1, type: type.name, data, id: opts.id ?? "" });
+    return {} as never;
+  };
+  let gaps = 0;
+  const gitlab = new GitLab({ url: server.url, token: () => server.token, fetch: server.fetch, now: () => 0 });
+  const written = await sync({ gitlab, journal, emit, gap: () => (gaps += 1), eventPages: 2 }, repo);
+  expect(gaps).toBe(1);
+  expect(written).toBe(200);
+  const whole = await sync({ gitlab, journal, emit, gap: () => (gaps += 1), eventPages: 3 }, repo);
+  expect(gaps).toBe(1);
+  expect(whole).toBe(0);
+});
+
+test("a repository says when it was last polled and what its last poll failed with, and a poll that found nothing is not a failure", async () => {
+  const host = await watched();
+  const status = async () => (await host.niwa.call(forgeRepoStatus, { repo: BILLING })).items;
+  expect(await status()).toEqual([{ repo: { ...BILLING, projectId: 42 } }]);
+  host.server.queue("GET", /\/events$/, 503, { message: "server is down" });
+  await expect(syncNow(host)).rejects.toThrow(/503/);
+  const [failed] = await status();
+  expect(failed).toMatchObject({ lastError: expect.stringContaining("503") });
+  expect(failed?.lastPassAt).toBeGreaterThan(0);
+  expect(failed).not.toHaveProperty("lastOkAt");
+  expect(await syncNow(host)).toEqual({ written: 0 });
+  const [ok] = await status();
+  expect(ok?.lastOkAt).toBeGreaterThan(0);
+  expect(ok).not.toHaveProperty("lastError");
+  expect((await host.niwa.call(forgeRepoStatus, {})).items).toHaveLength(1);
 });
 
 test("a repository that is not watched is not polled", async () => {
