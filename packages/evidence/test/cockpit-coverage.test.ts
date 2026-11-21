@@ -78,3 +78,12 @@ test("the form trims what is typed and reads commit ids in lower case", () => {
     requirement: { kind: "ci", at: "head", subject: "pr", sha: A },
   });
 });
+
+test("the form takes the commit ids the host takes and no others", () => {
+  for (const length of [39, 40, 41, 63, 64, 65]) {
+    const id = "d".repeat(length);
+    const built = requirementFromForm({ kind: "merge-result", subject: "pr", sha: id, targetSha: id, name: "" });
+    const taken = "requirement" in built && evidenceCovers.input.safeParse({ requirement: built.requirement }).success;
+    expect([length, "requirement" in built]).toEqual([length, taken]);
+  }
+});

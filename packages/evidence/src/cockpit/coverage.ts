@@ -68,7 +68,7 @@ export type RequirementForm = {
 
 export const EMPTY_FORM: RequirementForm = { kind: "merge-result", subject: "", sha: "", targetSha: "", name: "" };
 
-const SHA = /^[0-9a-f]{40,64}$/;
+const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /** The requirement the form describes, or what is wrong with it. */
 export function requirementFromForm(form: RequirementForm): { requirement: Requirement } | { problem: string } {
