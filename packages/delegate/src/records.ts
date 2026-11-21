@@ -48,6 +48,12 @@ export const DecisionMade = record(
     /** Who decided, when it speaks as an address. */
     by: Address.optional(),
   }),
+  { guard: {
+    group: "delegate.decision", key: data => data.id,
+    initial: () => false,
+    admit: decided => decided ? { code: "decided", reason: "the request is already decided" } : undefined,
+    fold: () => true,
+  } },
 );
 
 /** A decision was revoked: it is no longer recalled. */
@@ -62,8 +68,16 @@ export const RequestForwarded = record(
   z.object({ request: RequestId, to: Address }),
 );
 
+/** One handler owns forwarding and resolving this request throughout its lifetime. */
+export const HandlingStarted = record("delegate.handling.started", z.object({ request: RequestId }), { guard: {
+  group: "delegate.handling", key: data => data.request,
+  initial: () => false,
+  admit: started => started ? { code: "claimed", reason: "the request already has a delegate" } : undefined,
+  fold: () => true,
+} });
+
 /** The record types delegate declares. */
-export const DELEGATE_TYPES = [DecisionMade, DecisionRevoked, RequestForwarded] as const;
+export const DELEGATE_TYPES = [HandlingStarted, DecisionMade, DecisionRevoked, RequestForwarded] as const;
 
 export const delegateRecall = actionRef("delegate.recall", {
   description:

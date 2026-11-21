@@ -440,6 +440,23 @@ test("a request is decided once: a competing answer is refused and the same one 
   expect(await answerOf(w, asked)).toEqual({ ids: ["spaces"] });
 });
 
+test("concurrent delegates choosing the same answer receive one decision", async () => {
+  const { hold, release } = holdDecided();
+  const w = await world({ extra: [hold] });
+  try {
+    const request = await w.ask(choice("Tabs or spaces?", "style"));
+    await eventually(async () => (await w.to({ kind: "owner" })).length === 1);
+    const rin = await w.session("rin", ["delegate.decide@style"]);
+    const input = { request: request as never, area: "style", answer: { ids: ["tabs"] } };
+    const [one, two] = await Promise.all([rin.call(delegateDecide, input), rin.call(delegateDecide, input)]);
+    expect(one).toEqual(two);
+    expect(await w.records("delegate.decided")).toHaveLength(1);
+    expect(await w.records("delegate.handling.started")).toHaveLength(1);
+  } finally {
+    release();
+  }
+});
+
 test("a decision the request did not take is revoked, not left standing", async () => {
   const { hold, release } = holdDecided();
   const w = await world({ extra: [hold] });

@@ -16,6 +16,7 @@ import {
   DeniedError,
   EntityDescription,
   IdIndex,
+  RecordRefused,
   UnknownId,
   ValidationError,
   action,
@@ -50,6 +51,7 @@ import type { z } from "zod";
 import {
   ContextAnswer,
   DELEGATE_TYPES,
+  HandlingStarted,
   DecisionMade,
   DecisionRevoked,
   RequestForwarded,
@@ -345,8 +347,9 @@ export function delegate(opts: DelegateOptions): Plugin {
     // answer, side by side with the others.
     api.on(
       RequestCreated,
-      { id: "delegate-answer", filter: { "to.kind": "agent", "to.id": opts.agent }, concurrency: Infinity, requires: REQUIRED },
+      { id: "delegate-answer", filter: { "to.kind": "agent", "to.id": opts.agent }, concurrency: { by: data => data.id }, requires: REQUIRED },
       async (created, step, at) => {
+        await step.emit(HandlingStarted, { request: created.id }, { key: "claim" });
         const recalled = recallOf(rowsOf(at.seq), created.question, created.input);
         if (recalled !== undefined) {
           // An answer the question refuses today is not an answer: the request goes on as if nothing was recalled.
@@ -446,8 +449,6 @@ export function delegate(opts: DelegateOptions): Plugin {
       await step.emit(DecisionRevoked, { decision: decision.id, reason }, { key: "revoked" });
     });
 
-    /** The agent's decision of a request that is being written: a second call for it waits for the first. */
-    const deciding = new Map<RequestId, { readonly answer: Answer; readonly written: Promise<DecisionId> }>();
     /** The decision the agent made of a request, revoked or not. */
     const agentDecisionOf = (request: RequestId): { decision: Decision; revoked: boolean } | undefined => {
       const reader = journal();
@@ -475,24 +476,22 @@ export function delegate(opts: DelegateOptions): Plugin {
             if (stableJson(prior.decision.answer) !== stableJson(input.answer)) throw new DeniedError(`the request "${created.id}" is already decided otherwise`);
             return { decision: prior.decision.id };
           }
-          const claimed = deciding.get(created.id);
-          if (claimed !== undefined) {
-            if (stableJson(claimed.answer) !== stableJson(input.answer)) throw new DeniedError(`the request "${created.id}" is being decided otherwise`);
-            return { decision: await claimed.written };
-          }
           const mismatch = answerMismatch(created.input, input.answer);
           if (mismatch !== undefined) throw new ValidationError(`the answer is not one the question of "${created.id}" takes: ${mismatch}`);
           const state = journal() === undefined ? undefined : stateAt(created.id, journal()!.last());
           if (state?.status !== "open") throw new DeniedError(`the request "${created.id}" is ${state?.status ?? "unknown"}`);
           const decision = decided(created, "agent", input.answer, input.grounds, bind(ctx.caller));
           if (decision === undefined) throw new DeniedError(`the request "${created.id}" names no area to decide in`);
-          // Nothing is awaited between the look above and the claim: a competing call sees one or the other.
-          const written = ctx.emit(DecisionMade, decision).then(() => decision.id);
-          deciding.set(created.id, { answer: input.answer, written });
           try {
-            return { decision: await written };
-          } finally {
-            deciding.delete(created.id);
+            await ctx.emit(DecisionMade, decision);
+            return { decision: decision.id };
+          } catch (error) {
+            if (!(error instanceof RecordRefused) || error.code !== "decided") throw error;
+            const winner = agentDecisionOf(created.id);
+            if (winner !== undefined && !winner.revoked && stableJson(winner.decision.answer) === stableJson(input.answer)) {
+              return { decision: winner.decision.id };
+            }
+            throw error;
           }
         },
       }),
