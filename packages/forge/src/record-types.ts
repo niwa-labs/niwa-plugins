@@ -59,9 +59,6 @@ export const RunState = z.enum([
 ]);
 export type RunState = z.infer<typeof RunState>;
 
-/** The states a pipeline or a job does not leave by itself. */
-export const SETTLED_STATES: readonly RunState[] = ["success", "failed", "canceled", "skipped", "manual"];
-
 /** A pipeline as the module records it. */
 export const Pipeline = z.strictObject({
   repo: Repo,

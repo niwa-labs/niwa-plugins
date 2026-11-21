@@ -108,13 +108,21 @@ export async function pipelineOf(repo: Repo, pipeline: GitLabPipeline, parentsOf
   return { ...base, sourceSha, targetSha, mergeSha: pipeline.sha };
 }
 
+/**
+ * What one pipeline's state says of the change: green on success, red on a failure or a cancel,
+ * none when it was skipped, and pending otherwise, a pipeline that waits on a manual job included.
+ */
+export function verdictOf(state: RunState): ChecksState {
+  if (state === "success") return "green";
+  if (state === "failed" || state === "canceled") return "red";
+  return state === "skipped" ? "none" : "pending";
+}
+
 /** What the pipelines of one head say: the latest decides; none is `none`. */
 export function checksOf(pipelines: readonly Pipeline[]): { state: ChecksState; pipeline?: number } {
   const latest = [...pipelines].sort((a, b) => b.pipeline - a.pipeline)[0];
   if (latest === undefined) return { state: "none" };
-  const state: ChecksState =
-    latest.state === "success" ? "green" : latest.state === "failed" || latest.state === "canceled" ? "red" : latest.state === "skipped" ? "none" : "pending";
-  return { state, pipeline: latest.pipeline };
+  return { state: verdictOf(latest.state), pipeline: latest.pipeline };
 }
 
 /** The ref a pull request's pipelines run on. */

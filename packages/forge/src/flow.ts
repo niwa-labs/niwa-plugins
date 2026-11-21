@@ -9,7 +9,8 @@
 
 import { forgePipelineRead, forgePrMerge } from "./actions.ts";
 import type { MergeOutcome } from "./actions.ts";
-import { MergeDisarmed, PipelineObserved, PrClosed, PrMerged, SETTLED_STATES } from "./record-types.ts";
+import { verdictOf as stateVerdict } from "./normalize.ts";
+import { MergeDisarmed, PipelineObserved, PrClosed, PrMerged } from "./record-types.ts";
 import type { Pipeline, PipelineKind } from "./record-types.ts";
 import type { RepoName } from "./targets.ts";
 
@@ -53,16 +54,20 @@ const ROUND_MS = 300_000;
 /** What became of the pipeline of a commit. */
 export type PipelineOutcome = { outcome: "green" | "red" | "timed-out"; pipeline?: number };
 
-/** What the latest settled pipeline of a list says, or undefined while none has settled. */
+/**
+ * What the latest pipeline of a list says, as the checks of a pull request say it: green or red, or
+ * undefined while it is pending (a pipeline that waits on a manual job too) or was skipped.
+ */
 function verdictOf(items: readonly Pipeline[]): PipelineOutcome | undefined {
   const latest = [...items].sort((a, b) => b.pipeline - a.pipeline)[0];
-  if (latest === undefined || !SETTLED_STATES.includes(latest.state)) return undefined;
-  return { outcome: latest.state === "success" ? "green" : "red", pipeline: latest.pipeline };
+  if (latest === undefined) return undefined;
+  const verdict = stateVerdict(latest.state);
+  return verdict === "green" || verdict === "red" ? { outcome: verdict, pipeline: latest.pipeline } : undefined;
 }
 
 /**
- * Wait until the latest pipeline of a commit has settled: green on success, red on a failure or a
- * cancel, `timed-out` at the deadline. `kind` takes only pipelines of that kind (a merge result, say),
+ * Wait until the latest pipeline of a commit is green (success) or red (a failure or a cancel), or
+ * `timed-out` at the deadline: a pipeline that waits on a manual job is still pending. `kind` takes only pipelines of that kind (a merge result, say),
  * matched by the commit of the change they ran for. The server is read first, so a pipeline that
  * settled before the call answers at once; then the helper waits for the module's records of the
  * commit and reads again, which also keeps the repository polled at its fastest while it waits.

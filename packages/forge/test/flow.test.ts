@@ -109,3 +109,12 @@ test("durations are milliseconds or a number with a unit", () => {
 test("a helper called outside a script says so", async () => {
   await expect(untilPipeline("ci", { repo, sha: head, deadline: "1m" })).rejects.toThrow(/workflow script/);
 });
+
+test("a pipeline that waits on a manual job is still pending, as the checks of a pull request say", async () => {
+  scriptWith({
+    calls: { "forge.pipeline.read": [{ items: [pipeline(5, "manual")] }, { items: [pipeline(5, "success")] }] },
+    waits: { "forge.pipeline": [{ data: {}, at: 3 }] },
+    clock: [0, 1_000],
+  });
+  expect(await untilPipeline("ci", { repo, sha: head, deadline: "40m" })).toEqual({ outcome: "green", pipeline: 5 });
+});
