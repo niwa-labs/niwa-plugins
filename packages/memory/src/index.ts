@@ -53,6 +53,7 @@ import {
   memoryList,
   memoryNote,
   memoryPageGet,
+  memoryPageList,
   memoryPageWrite,
   memoryRetract,
   memorySearch,
@@ -428,6 +429,23 @@ export function memory(options: MemoryOptions = {}): Plugin {
           const found = asOf(input.at).page(memory, input.page);
           if (found === undefined) throw new MemoryRefusal("no-page", `the memory of ${memory} has no page ${input.page}`);
           return found;
+        },
+      }),
+    );
+
+    api.action(
+      action(memoryPageList, {
+        recovery: "repeat",
+        effect: "read",
+        world: "niwa",
+        run: (input, ctx) => {
+          const { memory } = reach(ctx, input.memory);
+          const pages = now()
+            .pagesOf(memory)
+            .filter((page) => holdsFor(page.project, input.project))
+            .map(({ text: _text, ...summary }) => summary)
+            .sort((a, b) => a.page.localeCompare(b.page));
+          return { memory, pages };
         },
       }),
     );

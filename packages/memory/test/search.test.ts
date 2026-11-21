@@ -39,6 +39,32 @@ test("a page is written whole, and a write over a change made since it was read 
   await expect(host.as(rin, "memory.page.write", { page: "big", title: "Big", text: "x".repeat(16 * 1024 + 1) })).rejects.toThrow();
 });
 
+type Listed = { memory: string; pages: Array<{ page: string; title: string; revision: number; project?: string; text?: string }> };
+
+test("the pages of a memory are listed by name at their latest revision, without their text", async () => {
+  const host = await memoryHost();
+  await host.as(rin, "memory.page.write", { page: "projects/billing", title: "Billing", text: "Invoices are made nightly.", project: "/work/billing" });
+  await host.as(rin, "memory.page.write", { page: "projects/billing", title: "Billing, again", text: "Invoices are made hourly.", project: "/work/billing" });
+  await host.as(rin, "memory.page.write", { page: "about", title: "About", text: "What this memory is for." });
+  await host.as(rin, "memory.page.write", { page: "projects/payroll", title: "Payroll", text: "Runs monthly.", project: "/work/payroll" });
+  await host.as(bob, "memory.page.write", { page: "bobs", title: "Bob's page", text: "Not rin's." });
+
+  const own = await host.as<Listed>(rin, "memory.page.list", {});
+  expect(own.memory).toBe("rin");
+  expect(own.pages.map((one) => [one.page, one.title, one.revision])).toEqual([
+    ["about", "About", 1],
+    ["projects/billing", "Billing, again", 2],
+    ["projects/payroll", "Payroll", 1],
+  ]);
+  expect(own.pages.some((one) => "text" in one)).toBe(false);
+
+  // A project is asked for with the pages of no project: the general ones.
+  expect((await host.as<Listed>(rin, "memory.page.list", { project: "/work/billing" })).pages.map((one) => one.page)).toEqual(["about", "projects/billing"]);
+  expect((await host.as<Listed>(owner, "memory.page.list", { memory: "bob" })).pages.map((one) => one.page)).toEqual(["bobs"]);
+  await expect(host.as(bob, "memory.page.list", { memory: "rin" })).rejects.toThrow(/only its own memory/);
+  await expect(host.as(owner, "memory.page.list", {})).rejects.toThrow(/name the memory/);
+});
+
 test("a search finds the notes that hold and the pages, best first, and nothing that was taken back or erased", async () => {
   const host = await memoryHost();
   const release = await host.as<{ note: string }>(rin, "memory.note", { text: "Releases go out on Fridays after the release check." });

@@ -347,6 +347,17 @@ export const memoryPageGet = actionRef("memory.page.get", {
   output: PageView,
 });
 
+/** What a page list shows of each page: where it stands, not its text. */
+export const PageSummary = PageView.omit({ text: true });
+export type PageSummary = z.output<typeof PageSummary>;
+
+export const memoryPageList = actionRef("memory.page.list", {
+  description:
+    "Lists the pages of a memory as they stand now, by name: the title, the project, the revision and who wrote it, without the text. With `project`, those of that project and the general ones.",
+  input: z.object({ ...Named, project: Project.optional() }),
+  output: z.object({ memory: MemoryName, pages: z.array(PageSummary) }),
+});
+
 export const memorySearch = actionRef("memory.search", {
   description:
     "Searches a memory by words: the notes that hold, the pages and the digests of attached sessions, best first. With `project`, only what holds for that project and in general. Words match whole or as the start of a longer word; nothing leaves the host.",

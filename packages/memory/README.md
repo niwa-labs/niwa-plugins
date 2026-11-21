@@ -40,7 +40,8 @@ earlier position, while the record that first held it stays.
 ## Reading
 
 - `memory.get`, `memory.list`, `memory.page.get` and `memory.search` read
-  the memory now or at a journal position (`at`).
+  the memory now or at a journal position (`at`). `memory.page.list` lists the
+  pages by name, with the revision of each and without the text.
 - `memory.search` ranks notes, pages and the latest digests by words with
   BM25. A word matches whole or as the start of a longer word. No model or
   external service is used.
