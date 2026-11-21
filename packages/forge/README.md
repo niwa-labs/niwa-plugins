@@ -31,8 +31,17 @@ value never reaches the journal. `fetch` may be passed to speak to a fake server
 - `forge.repo.status` says, per watched repository since the host started, when
   it was last polled, what the last poll failed with and whether the event log
   was read back far enough.
-- `/records`: record types, action references and target helpers.
-- `/flow`: `untilPipeline` and `land` for workflow scripts. `land` with `auto`
+- `/records`: record types, action references, target helpers and the query
+  builders of the records: `prHead(pr)`, `prMerged(pr)`, `prClosed(pr)`,
+  `prChecks(pr)`, `pipelineOf({ repo, sha, kind? })`, `pipelinesOfPr(pr)`,
+  `jobsOf({ repo, pipeline })`, `pushed(repo, ref?)` and the rest of the pull
+  request's records. A script waits for or reads them with the data typed
+  (`await wait(prMerged(pr), { timeout: "2h" })`,
+  `await read.records(pipelineOf({ repo, sha }))`), and a handler subscribes to
+  them. A pull request is `{ repo: { host, path }, number }`; a record's own
+  `pr` is accepted as it is.
+- `/flow`: `untilPipeline`, `land` and `untilHeadMoved` for
+  workflow scripts, built on those queries. `land` with `auto`
   reads the pull request between its waits, so a script that uses it lists
   `forge.pr.read` on the repository next to `forge.pr.merge`.
 - `pushReaction`: a built-in workflow that, on a push to a branch, names the

@@ -1,5 +1,6 @@
 /**
- * The script helpers of the forge module: wait for the pipeline of a commit, land a pull request.
+ * The script helpers of the forge module: wait for the pipeline of a commit, land a pull request, wait
+ * for the head of a pull request to move. They wait for the queries of `./queries.ts`.
  *
  * They run inside a workflow script and use its globals (`call`, `wait`, `now`, `race`), read when a
  * helper is called, so this file imports nothing of the script runtime. Every call a helper makes is
@@ -7,11 +8,14 @@
  * two helpers in one script need two keys.
  */
 
+import type { TypeQuery } from "@niwa-labs/core";
+import type { z } from "zod";
+
 import { forgePipelineRead, forgePrMerge, forgePrRead } from "./actions.ts";
 import type { MergeOutcome, PullRequest } from "./actions.ts";
 import { verdictOf as stateVerdict } from "./normalize.ts";
-import { MergeDisarmed, PipelineObserved, PrClosed, PrMerged } from "./record-types.ts";
-import type { Pipeline, PipelineKind } from "./record-types.ts";
+import type { Pipeline, PipelineKind, PrMerged } from "./record-types.ts";
+import { mergeDisarmed, pipelineOf, prClosed, prHead, prMerged } from "./queries.ts";
 import type { RepoName } from "./targets.ts";
 
 /** A duration as a script writes it: milliseconds, or "500ms", "30s", "5m", "2h", "1d". */
@@ -24,10 +28,13 @@ interface Labeled {
 /** What the helpers take of a script's globals. */
 interface ScriptGlobals {
   call(name: string, input: unknown, opts?: Labeled): Promise<any>;
-  wait(type: string, opts: { filter?: Record<string, unknown>; from?: number; timeout: Duration; label?: string }): Promise<{ data: any; at: number } | { timedOut: true }>;
+  wait<D>(query: TypeQuery<D>, opts: { from?: number; timeout?: Duration; label?: string }): Promise<{ data: D; at: number } | { timedOut: true }>;
   now(opts?: Labeled): Promise<number>;
   race<K extends string, T>(name: string, branches: Record<K, () => Promise<T>>): Promise<{ key: K; value: T }>;
 }
+
+/** What a wait answers when the data's type does not matter: the branches of a race answer alike. */
+type Waited = { data: unknown; at: number } | { timedOut: true };
 
 /** The globals of the script that calls a helper. */
 function script(): ScriptGlobals {
@@ -88,7 +95,7 @@ export async function untilPipeline(
   const started = await api.now({ label: `${key}-start` });
   const until = started + durationMs(opts.deadline);
   const repo = nameOf(opts.repo);
-  const filter = { "repo.host": repo.host, "repo.path": repo.path, sourceSha: opts.sha, ...(opts.kind === undefined ? {} : { kind: opts.kind }) };
+  const query = pipelineOf({ repo, sha: opts.sha, ...(opts.kind === undefined ? {} : { kind: opts.kind }) });
   let from: number | undefined;
   for (let round = 1; ; round += 1) {
     const read = await api.call(forgePipelineRead.name, { repo, sha: opts.sha, ...(opts.kind === undefined ? {} : { kind: opts.kind }) }, { label: `${key}-read-${String(round)}` });
@@ -96,8 +103,7 @@ export async function untilPipeline(
     if (settled !== undefined) return settled;
     const now = await api.now({ label: `${key}-now-${String(round)}` });
     if (now >= until) return { outcome: "timed-out" };
-    const waited = await api.wait(PipelineObserved.name, {
-      filter,
+    const waited = await api.wait(query, {
       ...(from === undefined ? {} : { from }),
       timeout: Math.min(ROUND_MS, until - now),
       label: `${key}-wait-${String(round)}`,
@@ -139,7 +145,7 @@ export async function land(
   )) as MergeOutcome;
   if (asked.outcome === "merged") return { outcome: "merged", sha: asked.sha };
   if (asked.outcome === "refused") return { outcome: "refused", why: asked.why };
-  const filter = { "pr.repo.host": repo.host, "pr.repo.path": repo.path, "pr.number": opts.pr.number };
+  const pr = { repo, number: opts.pr.number };
   const started = await api.now({ label: `${key}-start` });
   const until = started + durationMs(opts.deadline ?? "2h");
   const mergedAt = (head: string | undefined, sha: string | undefined): LandOutcome =>
@@ -150,16 +156,16 @@ export async function land(
     const now = round === 1 ? started : await api.now({ label: `${key}-now-${String(round)}` });
     if (now >= until && round > 1) return { outcome: "queued-unknown", why: `the server took the merge as ${asked.externalId} and has not made it yet` };
     const timeout = Math.max(1, Math.min(ROUND_MS, until - now));
-    const ended = await api.race(`${key}-end-${String(round)}`, {
-      merged: () => api.wait(PrMerged.name, { filter, timeout, label: `${key}-merged-${String(round)}` }),
-      closed: () => api.wait(PrClosed.name, { filter, timeout, label: `${key}-closed-${String(round)}` }),
-      disarmed: () => api.wait(MergeDisarmed.name, { filter, timeout, label: `${key}-disarmed-${String(round)}` }),
+    const ended = await api.race<"merged" | "closed" | "disarmed", Waited>(`${key}-end-${String(round)}`, {
+      merged: () => api.wait(prMerged(pr), { timeout, label: `${key}-merged-${String(round)}` }),
+      closed: () => api.wait(prClosed(pr), { timeout, label: `${key}-closed-${String(round)}` }),
+      disarmed: () => api.wait(mergeDisarmed(pr), { timeout, label: `${key}-disarmed-${String(round)}` }),
     });
     const waited = ended.value;
     if (!("timedOut" in waited)) {
       if (ended.key === "closed") return { outcome: "refused", why: `${asked.externalId} was closed before the server merged it` };
       if (ended.key === "disarmed") return { outcome: "refused", why: `the merge of ${asked.externalId} was called off` };
-      const merged = waited.data as { head?: string; mergeSha?: string };
+      const merged = waited.data as z.output<typeof PrMerged.schema>;
       return mergedAt(merged.head, merged.mergeSha);
     }
     const read = (await api.call(forgePrRead.name, { repo, number: opts.pr.number }, { label: `${key}-read-${String(round)}` })) as PullRequest;
@@ -167,4 +173,24 @@ export async function land(
     if (read.state === "closed") return { outcome: "refused", why: `${asked.externalId} was closed before the server merged it` };
     if (read.state === "open" && !read.autoMerge) return { outcome: "refused", why: `the server no longer holds the merge of ${asked.externalId}` };
   }
+}
+
+/** What became of the head of a pull request while a script waited for it to move. */
+export type HeadMove = { moved: true; head: string; previous?: string; at: number } | { moved: false };
+
+/**
+ * Wait until the head of a pull request moves (new commits, a rebase, a force push) after `from`, a
+ * position an earlier wait or read answered, or after the wait began; `moved: false` at the timeout.
+ * Without a timeout it waits for ever. It waits for the module's record of the move, so the repository
+ * must be watched; `at` is the position to wait on from.
+ */
+export async function untilHeadMoved(key: string, opts: { pr: PrRefGiven; from?: number; timeout?: Duration }): Promise<HeadMove> {
+  const waited = await script().wait(prHead({ repo: nameOf(opts.pr.repo), number: opts.pr.number }), {
+    ...(opts.from === undefined ? {} : { from: opts.from }),
+    ...(opts.timeout === undefined ? {} : { timeout: opts.timeout }),
+    label: key,
+  });
+  if ("timedOut" in waited) return { moved: false };
+  const { head, previous } = waited.data;
+  return { moved: true, head, ...(previous === undefined ? {} : { previous }), at: waited.at };
 }
