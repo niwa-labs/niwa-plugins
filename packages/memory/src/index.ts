@@ -13,6 +13,8 @@
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
+import type { z } from "zod";
+
 import { action, agent as agentAddress, addressText, confirmOptions, isYes, owner, recordId, recordTypeName, seq, stableJson } from "@niwa-labs/core";
 import type { ActionContext, Address, Caller, JournalReader, Step } from "@niwa-labs/core";
 import { COCKPIT_MODULE, plugin } from "@niwa-labs/plugin";
@@ -275,6 +277,17 @@ export function memory(options: MemoryOptions = {}): Plugin {
       return found;
     };
 
+    /**
+     * What this operation wrote as its `n`-th record, when it is being made again after the record was written and
+     * before its result was saved. The id of a record follows the operation, so the record is found by it: the repeat
+     * answers from what was written, and does not plan again against a memory its own first run has changed.
+     */
+    const wrote = <T>(ctx: ActionContext, type: { readonly name: string; readonly schema: { safeParse(value: unknown): { success: true; data: T } | { success: false } } }, n = 1): { data: T; seq: number } | undefined => {
+      const stored = journal().get(recordId(`${ctx.operationId}/emit/${String(n)}`));
+      const data = stored === undefined ? undefined : dataAs(stored, type);
+      return stored === undefined || data === undefined ? undefined : { data, seq: Number(stored.seq) };
+    };
+
     api.action(
       action(memoryNote, {
         // The id follows the operation: a call made again writes the same note once.
@@ -286,6 +299,10 @@ export function memory(options: MemoryOptions = {}): Plugin {
           if (input.source.kind === "owner" && by.kind !== "owner") {
             throw new MemoryRefusal("not-owner", "only the owner gives a note the owner as its source: what someone else says of him is their word");
           }
+          const written = wrote(ctx, NoteWritten);
+          if (written !== undefined) return { memory: written.data.memory, note: written.data.note, corroborated: false };
+          const joined = wrote(ctx, NoteCorroborated);
+          if (joined !== undefined) return { memory: joined.data.memory, note: joined.data.note, corroborated: true };
           // The memory holds it already, in the same words: it gains a source, not a copy.
           const memories = now();
           const held = memories
@@ -366,6 +383,8 @@ export function memory(options: MemoryOptions = {}): Plugin {
         world: "niwa",
         run: async (input, ctx) => {
           const { memory, by } = reach(ctx, input.memory);
+          const corrected = wrote(ctx, NoteCorrected);
+          if (corrected !== undefined) return { note: input.note, revision: asOf(corrected.seq).note(memory, input.note)?.revision ?? 0 };
           const found = changeable(memory, input.note);
           await ctx.emit(NoteCorrected, { memory, note: input.note, text: input.text, ...(input.detail === undefined ? {} : { detail: input.detail }), by });
           return { note: input.note, revision: found.revision + 1 };
@@ -411,6 +430,8 @@ export function memory(options: MemoryOptions = {}): Plugin {
         world: "niwa",
         run: async (input, ctx) => {
           const { memory, by } = reach(ctx, input.memory);
+          const done = wrote(ctx, PageWritten);
+          if (done !== undefined) return { page: done.data.page, revision: done.data.revision };
           const current = now().page(memory, input.page)?.revision ?? 0;
           if (input.revision !== undefined && input.revision !== current) {
             throw new MemoryRefusal("stale-page", `the page ${input.page} is at revision ${String(current)}, not ${String(input.revision)}: read it again`);
@@ -566,6 +587,8 @@ export function memory(options: MemoryOptions = {}): Plugin {
         world: "niwa",
         run: async (input, ctx) => {
           const { memory } = reach(ctx, input.memory);
+          const recorded = wrote(ctx, Consolidated);
+          if (recorded !== undefined) return recorded.data;
           const memories = now();
           const done = consolidate(memories.notesOf(memory), limits, clock(), (note, merged) =>
             memories.sourcesWith(memory, note.note, merged.map((one) => one.note)),
@@ -627,7 +650,14 @@ export function memory(options: MemoryOptions = {}): Plugin {
             withheld.push({ note: note.note, reason: "about-the-owner", status });
             if (share === undefined && asking) asks.push(note);
           }
-          for (const note of asks) await ctx.emit(ShareWanted, { memory: input.memory, note: note.note, revision: note.revision, for: reader, purpose: input.purpose });
+          // Made again after a cut, it writes what it wrote before, in the same order, and then what is still to ask.
+          const before: Array<z.output<typeof ShareWanted.schema>> = [];
+          for (let n = 1, again = wrote(ctx, ShareWanted, n); again !== undefined; again = wrote(ctx, ShareWanted, ++n)) before.push(again.data);
+          for (const wanted of before) await ctx.emit(ShareWanted, wanted);
+          for (const note of asks) {
+            if (before.some((wanted) => wanted.note === note.note && wanted.revision === note.revision)) continue;
+            await ctx.emit(ShareWanted, { memory: input.memory, note: note.note, revision: note.revision, for: reader, purpose: input.purpose });
+          }
           // A note erased while the answer was being written is not told.
           const erased = now();
           return { memory: agentAddress(input.memory), for: reader, at, items: items.filter((item) => erased.note(input.memory, item.note)?.status !== "erased"), withheld };

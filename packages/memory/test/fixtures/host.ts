@@ -2,8 +2,8 @@
 // the module share. The memory is given a binding the check steers, so a call made from the check speaks
 // as the address the check names.
 
-import { action, actionName, owner } from "@niwa-labs/core";
-import type { ActionName, Address, StoredRecord } from "@niwa-labs/core";
+import { action, actionName, owner, recordId } from "@niwa-labs/core";
+import type { Action, ActionContext, ActionName, Address, OperationId, RecordType, StoredRecord } from "@niwa-labs/core";
 import { plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
 import { AGENT_BRIEFING, AGENT_TYPES, BriefingSectionOutput, agentBriefing, agentGet } from "@niwa-labs/agent/records";
@@ -55,8 +55,39 @@ export function agentsStandIn(agents: readonly AgentDefinitionInput[] = [], hold
   });
 }
 
+/** The module with its actions kept as it registers them, so a check can run one under an operation of its own. */
+function capturing(made: Plugin): { plugin: Plugin; actions: Map<string, Action<any, any>> } {
+  const actions = new Map<string, Action<any, any>>();
+  const wrapped = plugin(
+    made.name,
+    (api) => {
+      const spy = new Proxy(api, {
+        get(target, key) {
+          if (key === "action") {
+            return (one: Action<any, any>) => {
+              actions.set(one.name, one);
+              target.action(one);
+            };
+          }
+          const value: unknown = Reflect.get(target, key);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      made.setup(spy);
+    },
+    { version: made.version },
+  );
+  return { plugin: wrapped, actions };
+}
+
 export interface MemoryHost {
   readonly host: Host;
+  /**
+   * Run an action as the host does for an operation, and as it is run again after a cut: the records it writes are
+   * given the ids of the operation (`<operation>/emit/<n>`), so a repeat meets what the first run wrote. `cutAfter`
+   * stops the run after that many records, as a crash between writing a record and saving the result does.
+   */
+  again<O = unknown>(name: string, input: unknown, operation: string, cutAfter?: number): Promise<O>;
   readonly home: string;
   readonly clock: TestClock;
   /** Call an action as an address: an agent, the owner; undefined calls it as the host, bound to nobody. */
@@ -88,7 +119,8 @@ export async function memoryHost(options: Omit<MemoryOptions, "bind"> = {}, more
     if (caller.kind === "client" && caller.principal?.kind === "owner") return owner;
     return undefined;
   };
-  niwa.use(...baseStack().plugins, agentsStandIn(more.agents, more.hold), memory({ ...options, bind }), ...(more.after ?? []));
+  const { plugin: module, actions } = capturing(memory({ ...options, bind }));
+  niwa.use(...baseStack().plugins, agentsStandIn(more.agents, more.hold), module, ...(more.after ?? []));
   await niwa.serve();
   let closed = false;
   const made: MemoryHost = {
@@ -102,6 +134,21 @@ export async function memoryHost(options: Omit<MemoryOptions, "bind"> = {}, more
       } finally {
         speaking = undefined;
       }
+    },
+    async again<O>(name: string, input: unknown, operation: string, cutAfter = Number.POSITIVE_INFINITY): Promise<O> {
+      const found = actions.get(name);
+      if (found === undefined) throw new Error(`the memory has no action ${name}`);
+      let ordinal = 0;
+      const ctx = {
+        operationId: operation as OperationId,
+        caller: { kind: "host" },
+        emit: async <T>(type: RecordType<T>, data: T): Promise<StoredRecord> => {
+          if (ordinal >= cutAfter) throw new Error("cut");
+          ordinal += 1;
+          return niwa.emit(type, data, { id: recordId(`${operation}/emit/${ordinal}`) });
+        },
+      } as unknown as ActionContext;
+      return (await found.run(found.input.parse(input), ctx)) as O;
     },
     records: () => niwa.records.read(),
     async close() {
