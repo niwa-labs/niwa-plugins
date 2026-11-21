@@ -10,6 +10,8 @@ pipeline for a specific pair of commits.
   `excluded-author`. A merge result covers only the pair of commits it ran on.
 - `/records`: the record type, the claims, the requirements and the action
   references.
+- `./cockpit`: the cockpit page lists the attestations of each subject, says for each whether it still stands, and
+  takes a requirement to ask the host whether it is covered.
 
 An attestation counts only if the host's record of who wrote it agrees with its
 author: a client that writes `evidence.attested` straight to the journal cannot

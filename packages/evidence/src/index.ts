@@ -16,9 +16,11 @@
  * subject, and a list is paged.
  */
 
+import { fileURLToPath } from "node:url";
+
 import { CatchableError, action, seq, stableJson } from "@niwa-labs/core";
 import type { Address, Caller, JournalReader, StoredRecord } from "@niwa-labs/core";
-import { bindingOf, plugin } from "@niwa-labs/plugin";
+import { COCKPIT_MODULE, bindingOf, plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
 
 import { Attested, EVIDENCE_TYPES, evidenceAttest, evidenceCovers, evidenceList } from "./records.ts";
@@ -163,6 +165,8 @@ export function evidence(options: EvidenceOptions = {}): Plugin {
 
   return plugin("evidence", (api) => {
     api.declare(...EVIDENCE_TYPES);
+    // The page of this plugin in the cockpit: a client module, offered by the path of its source.
+    api.offer(COCKPIT_MODULE, { id: "evidence", entry: fileURLToPath(new URL("./cockpit/index.tsx", import.meta.url)) });
     const journal = (): JournalReader | undefined => api.journal?.();
 
     api.action(
