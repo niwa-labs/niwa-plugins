@@ -51,9 +51,14 @@ export function sourceKey(source: NoteSource, by: TurnAuthor): string {
 /** Where the owner's word on a note leaving for an address stands: asked, or answered. */
 export type ShareState = "asked" | "allowed" | "refused";
 
-/** The key of the owner's word on one revision of one note for one address. */
-function shareKey(memory: MemoryName, note: NoteId, revision: number, to: Address): string {
-  return `${memory} ${note} ${String(revision)} ${stableJson(to)}`;
+/** A purpose as it is compared: its words, one space apart. */
+function purposeText(purpose: string): string {
+  return purpose.trim().replace(/\s+/g, " ");
+}
+
+/** The key of the owner's word on one revision of one note for one address and one purpose, or for any. */
+function shareKey(memory: MemoryName, note: NoteId, revision: number, to: Address, purpose: string | undefined): string {
+  return stableJson([memory, note, revision, to, purpose === undefined ? null : purposeText(purpose)]);
 }
 
 /** The notes of every memory, as far as the records folded so far say. */
@@ -61,7 +66,7 @@ export class Memories {
   readonly #notes = new Map<MemoryName, Map<NoteId, NoteView>>();
   readonly #pages = new Map<MemoryName, Map<PageName, PageView>>();
   readonly #digests = new Map<MemoryName, TakenDigest[]>();
-  readonly #shares = new Map<string, ShareState>();
+  readonly #shares = new Map<string, { state: ShareState; at: number }>();
   /** The sources each note counts, by memory and note. */
   readonly #sources = new Map<string, Set<string>>();
   /** How many records changed each memory since it was last consolidated. */
@@ -102,9 +107,15 @@ export class Memories {
     return this.#digests.get(memory) ?? [];
   }
 
-  /** Where the owner's word on a note leaving for an address stands, for the note's revision now. */
-  share(memory: MemoryName, note: NoteId, revision: number, to: Address): ShareState | undefined {
-    return this.#shares.get(shareKey(memory, note, revision, to));
+  /**
+   * Where the owner's word on a note leaving for an address stands, for one revision of the note and one purpose.
+   * His latest answer, for the purpose or for every purpose, stands before a question that still waits.
+   */
+  share(memory: MemoryName, note: NoteId, revision: number, to: Address, purpose: string): ShareState | undefined {
+    const named = this.#shares.get(shareKey(memory, note, revision, to, purpose));
+    const every = this.#shares.get(shareKey(memory, note, revision, to, undefined));
+    const answered = [named, every].filter((one) => one !== undefined && one.state !== "asked").sort((a, b) => (b?.at ?? 0) - (a?.at ?? 0));
+    return answered[0]?.state ?? named?.state ?? every?.state;
   }
 
   /** Erase here what `later` erased: an erased note is not read back at any position. */
@@ -184,13 +195,13 @@ export class Memories {
     }
     const wanted = dataAs(stored, ShareWanted);
     if (wanted !== undefined) {
-      const key = shareKey(wanted.memory, wanted.note, wanted.revision, wanted.for);
-      if (!this.#shares.has(key)) this.#shares.set(key, "asked");
+      const key = shareKey(wanted.memory, wanted.note, wanted.revision, wanted.for, wanted.purpose);
+      if (!this.#shares.has(key)) this.#shares.set(key, { state: "asked", at });
       return;
     }
     const answered = dataAs(stored, ShareAnswered);
     if (answered !== undefined) {
-      this.#shares.set(shareKey(answered.memory, answered.note, answered.revision, answered.for), answered.allowed ? "allowed" : "refused");
+      this.#shares.set(shareKey(answered.memory, answered.note, answered.revision, answered.for, answered.purpose), { state: answered.allowed ? "allowed" : "refused", at });
       return;
     }
     const page = dataAs(stored, PageWritten);

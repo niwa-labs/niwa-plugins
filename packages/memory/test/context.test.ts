@@ -190,3 +190,31 @@ test("'asked' is said only when the owner was asked: a read at a position asks n
   ]);
   expect(dataOf(await host.records(), "memory.share.wanted")).toHaveLength(1);
 });
+
+test("the owner's yes is for the purpose he was told, and a request for another purpose asks him again", async () => {
+  const host = await served();
+  const note = await noted(host, { text: "He is on leave in May.", about: "owner" });
+  await ask(host, bob, { query: "leave", purpose: "to plan the week" });
+  const [first] = (await until(host, "request.created")).filter((one) => one.type === "request.created");
+  await answer(host, (first!.data as { id: string }).id, true);
+  await until(host, "memory.share.answered");
+  expect((await ask(host, bob, { query: "leave", purpose: "to plan the week" })).items.map((item) => item.note)).toEqual([note]);
+
+  const other = await ask(host, bob, { query: "leave", purpose: "to write him a letter" });
+  expect(other.items).toEqual([]);
+  expect(other.withheld).toEqual([{ note, reason: "about-the-owner", status: "asked" }]);
+  const created = (await until(host, "request.created", 2)).filter((one) => one.type === "request.created");
+  expect((created[1]!.data as { input: { detail: string } }).input.detail).toContain("to write him a letter");
+  expect(dataOf(await host.records(), "memory.share.answered")).toMatchObject([{ purpose: "to plan the week", allowed: true }]);
+});
+
+test("the owner may allow a note for every purpose, or for one, in his own words", async () => {
+  const host = await served();
+  const note = await noted(host, { text: "He is on leave in May.", about: "owner" });
+  await host.as(owner, "memory.share", { memory: "rin", note, for: bob, allowed: true, purpose: "to plan the week" });
+  expect((await ask(host, bob, { query: "leave", purpose: "to plan the week" })).items).toHaveLength(1);
+  expect((await ask(host, bob, { query: "leave", purpose: "to write him a letter" })).items).toEqual([]);
+  await host.as(owner, "memory.share", { memory: "rin", note, for: bob, allowed: true });
+  expect((await ask(host, bob, { query: "leave", purpose: "to write him a letter" })).items).toHaveLength(1);
+  expect((await ask(host, lead, { query: "leave", purpose: "to plan the week" })).items).toEqual([]);
+});

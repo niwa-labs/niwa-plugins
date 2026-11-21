@@ -61,9 +61,10 @@ own agent and the owner get notes whole. Any other addressee gets only the
 conclusion, whom it is about and where it holds:
 
 - a note about the owner leaves only after the owner says yes for that
-  addressee and that revision of the note. He is asked once
-  (`request.ask`); an answer found by a resolver lets nothing leave, and
-  `memory.share` gives his word without a question. A request read at a
+  addressee, that revision of the note and the purpose he was told. He is
+  asked once for each (`request.ask`); an answer found by a resolver lets
+  nothing leave, and `memory.share` gives his word without a question, for
+  the purpose he names or, naming none, for every purpose. A request read at a
   position (`at`) asks nobody, and says `not-asked` for a note he was never
   asked of, `asked` only when his question stood at that position;
 - a project note goes to agents whose project contains it, and is not so

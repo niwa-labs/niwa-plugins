@@ -185,7 +185,7 @@ export const DigestTaken = record(
 
 /**
  * A note about the owner was wanted by another address, for a purpose: it leaves the memory only on the
- * owner's own answer, which is asked for once for each revision of the note and each address.
+ * owner's own answer, which is asked for once for each revision of the note, each address and each purpose.
  */
 export const ShareWanted = record(
   "memory.share.wanted",
@@ -204,6 +204,8 @@ export const ShareAnswered = record(
     note: NoteId,
     revision: z.number().int().positive(),
     for: Address,
+    /** What the answer holds for: the purpose he was told. Without one it holds for every purpose, which only he says himself. */
+    purpose: z.string().min(1).optional(),
     allowed: z.boolean(),
     request: RequestId.optional(),
     reason: z.enum(["not-the-owner", "unanswered"]).optional(),
@@ -464,7 +466,7 @@ export type Withheld = z.output<typeof Withheld>;
 
 export const memoryContext = actionRef("memory.context", {
   description:
-    "Asks a memory for context: what it holds that bears on `query`, for an addressee and a purpose. Another agent is told only the conclusions with whom they are about and where they hold, never what backs them; a project's notes go to that project's agents and are not named to any other; the limit counts only the conclusions the addressee may be told; a note about the owner leaves only once the owner said yes, and he is asked unless the request is read at a position (`at`), which asks nobody. Every conclusion carries its source: the memory's address, the note and the position of the journal; give `at` to read the memory as it stood then.",
+    "Asks a memory for context: what it holds that bears on `query`, for an addressee and a purpose. Another agent is told only the conclusions with whom they are about and where they hold, never what backs them; a project's notes go to that project's agents and are not named to any other; the limit counts only the conclusions the addressee may be told; a note about the owner leaves only once the owner said yes for that addressee and purpose, and he is asked unless the request is read at a position (`at`), which asks nobody. Every conclusion carries its source: the memory's address, the note and the position of the journal; give `at` to read the memory as it stood then.",
   input: z.object({
     memory: MemoryName,
     query: z.string().min(1).max(500),
@@ -487,8 +489,8 @@ export const memoryContext = actionRef("memory.context", {
 
 export const memoryShare = actionRef("memory.share", {
   description:
-    "The owner says whether a note about him may leave a memory for an address, without being asked. Only the owner may; his word holds for the note as it is now.",
-  input: z.object({ memory: MemoryName, note: NoteId, for: Address, allowed: z.boolean() }),
+    "The owner says whether a note about him may leave a memory for an address, without being asked. Only the owner may; his word holds for the note as it is now, and for the `purpose` he names, or for every purpose when he names none.",
+  input: z.object({ memory: MemoryName, note: NoteId, for: Address, purpose: z.string().min(1).max(500).optional(), allowed: z.boolean() }),
   output: z.object({ note: NoteId, allowed: z.boolean() }),
 });
 

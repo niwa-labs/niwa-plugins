@@ -609,7 +609,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
           const memories = asOf(at);
           const who: Reader = home ? { kind: "home" } : { kind: "other", ...(project === undefined ? {} : { project }) };
           const holding = memories.notesOf(input.memory).filter((note) => holds(note) && holdsFor(note.project, input.project));
-          const stands = holding.map((note) => ({ note, standing: standing(note, who, memories.share(input.memory, note.note, note.revision, reader)) }));
+          const stands = holding.map((note) => ({ note, standing: standing(note, who, memories.share(input.memory, note.note, note.revision, reader, input.purpose)) }));
           // What backs a note is searched only for its own readers: a match on it would tell of it.
           const readable = stands.filter((one) => one.standing === "told").map(({ note }) => ({ text: home ? `${note.text}\n${note.detail ?? ""}` : note.text, value: note }));
           const items = rank(input.query, readable, input.limit).map(({ value }) => conclusion(value, who));
@@ -621,7 +621,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
           // An answer read again at its position asks nobody: it says only whether the owner had been asked.
           const asking = input.at === undefined;
           for (const note of matched) {
-            const share = memories.share(input.memory, note.note, note.revision, reader);
+            const share = memories.share(input.memory, note.note, note.revision, reader, input.purpose);
             const status = share === "refused" ? "refused" : share === "asked" || (share === undefined && asking) ? "asked" : "not-asked";
             withheld.push({ note: note.note, reason: "about-the-owner", status });
             if (share === undefined && asking) asks.push(note);
@@ -643,7 +643,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
         run: async (input, ctx) => {
           if (bind(ctx.caller)?.kind !== "owner") throw new MemoryRefusal("not-owner", "only the owner says whether a note about him may leave");
           const found = changeable(input.memory, input.note);
-          await ctx.emit(ShareAnswered, { memory: input.memory, note: input.note, revision: found.revision, for: input.for, allowed: input.allowed });
+          await ctx.emit(ShareAnswered, { memory: input.memory, note: input.note, revision: found.revision, for: input.for, ...(input.purpose === undefined ? {} : { purpose: input.purpose }), allowed: input.allowed });
           return { note: input.note, allowed: input.allowed };
         },
       }),
@@ -675,7 +675,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
           options: confirmOptions(),
         },
       });
-      const decided = { memory: wanted.memory, note: wanted.note, revision: wanted.revision, for: wanted.for };
+      const decided = { memory: wanted.memory, note: wanted.note, revision: wanted.revision, for: wanted.for, purpose: wanted.purpose };
       if (asked.status !== "completed" || !("answer" in asked.value)) {
         await step.emit(ShareAnswered, { ...decided, allowed: false, reason: "unanswered" }, { key: "answered" });
         return;
