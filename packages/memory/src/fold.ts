@@ -5,7 +5,7 @@ import { stableJson } from "@niwa-labs/core";
 import type { Address, StoredRecord } from "@niwa-labs/core";
 import type { TurnAuthor } from "@niwa-labs/agent/records";
 
-import { DigestTaken, NoteConfirmed, NoteCorroborated, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageWritten, ShareAnswered, ShareWanted } from "./records.ts";
+import { Consolidated, DigestTaken, NoteConfirmed, NoteCorroborated, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageWritten, ShareAnswered, ShareWanted } from "./records.ts";
 import type { MemoryName, NoteId, NoteSource, NoteView, PageName, PageView } from "./records.ts";
 
 /** A record type with its schema: what the fold parses a stored record with. */
@@ -64,11 +64,13 @@ export class Memories {
   readonly #shares = new Map<string, ShareState>();
   /** The sources each note counts, by memory and note. */
   readonly #sources = new Map<string, Set<string>>();
+  /** How many records changed each memory since it was last consolidated. */
+  readonly #changes = new Map<MemoryName, number>();
   /** The position of the last record folded. */
   seq = 0;
 
   /** The record types a fold reads. */
-  static readonly TYPES: readonly string[] = [NoteWritten, NoteCorroborated, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered].map((type) => type.name);
+  static readonly TYPES: readonly string[] = [NoteWritten, NoteCorroborated, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered, Consolidated].map((type) => type.name);
 
   /** The notes of one memory, in the order they were written. */
   notesOf(memory: MemoryName): NoteView[] {
@@ -116,6 +118,18 @@ export class Memories {
     }
   }
 
+  /** How many records changed a memory since it was last consolidated. */
+  changesOf(memory: MemoryName): number {
+    return this.#changes.get(memory) ?? 0;
+  }
+
+  /** How many sources a note has with the sources of the notes merged into it. */
+  sourcesWith(memory: MemoryName, note: NoteId, merged: readonly NoteId[]): number {
+    const all = new Set(this.#sources.get(`${memory} ${note}`));
+    for (const one of merged) for (const key of this.#sources.get(`${memory} ${one}`) ?? []) all.add(key);
+    return Math.max(all.size, 1);
+  }
+
   /** Whether a note already counts this source. */
   counts(memory: MemoryName, note: NoteId, key: string): boolean {
     return this.#sources.get(`${memory} ${note}`)?.has(key) ?? false;
@@ -125,6 +139,14 @@ export class Memories {
   apply(stored: StoredRecord): void {
     this.seq = Math.max(this.seq, Number(stored.seq));
     const at = Number(stored.seq);
+    this.#when = Number(stored.at);
+    const consolidated = dataAs(stored, Consolidated);
+    if (consolidated !== undefined) {
+      this.#consolidated(consolidated, at);
+      return;
+    }
+    const memory = (stored.data as { memory?: unknown } | null)?.memory;
+    if (typeof memory === "string" && !stored.type.startsWith("memory.share.")) this.#changes.set(memory as MemoryName, this.changesOf(memory as MemoryName) + 1);
     const written = dataAs(stored, NoteWritten);
     if (written !== undefined) {
       const notes = this.#notes.get(written.memory) ?? new Map<NoteId, NoteView>();
@@ -144,6 +166,7 @@ export class Memories {
         status: "live",
         confirmed: ownersWord,
         sources: 1,
+        changed: Number(stored.at),
         top: false,
         pinned: false,
         revision: 1,
@@ -238,10 +261,28 @@ export class Memories {
     }
   }
 
+  /** When the record folded last was written. */
+  #when = 0;
+
   #change(memory: MemoryName, id: NoteId, at: number, fn: (note: NoteView) => NoteView): void {
     const notes = this.#notes.get(memory);
     const note = notes?.get(id);
     if (notes === undefined || note === undefined || note.status === "erased") return;
-    notes.set(id, { ...fn(note), seq: at });
+    notes.set(id, { ...fn(note), seq: at, changed: this.#when });
+  }
+
+  #consolidated(done: { memory: MemoryName; merged: Array<{ note: NoteId; into: NoteId }>; lifted: NoteId[]; dropped: NoteId[]; retired: NoteId[] }, at: number): void {
+    const { memory } = done;
+    this.#changes.set(memory, 0);
+    for (const { note, into } of done.merged) {
+      const away = this.note(memory, note);
+      const kept = this.#sources.get(`${memory} ${into}`);
+      for (const key of this.#sources.get(`${memory} ${note}`) ?? []) kept?.add(key);
+      this.#change(memory, note, at, (one) => ({ ...one, status: "merged", top: false }));
+      this.#change(memory, into, at, (one) => ({ ...one, sources: kept?.size ?? one.sources, confirmed: one.confirmed || away?.confirmed === true }));
+    }
+    for (const note of done.lifted) this.#change(memory, note, at, (one) => ({ ...one, top: true }));
+    for (const note of done.dropped) this.#change(memory, note, at, (one) => ({ ...one, top: false }));
+    for (const note of done.retired) this.#change(memory, note, at, (one) => ({ ...one, status: "retired", top: false }));
   }
 }

@@ -186,11 +186,27 @@ export const ShareAnswered = record(
   }),
 );
 
+/**
+ * A memory was consolidated: notes that say the same were merged into one, the notes that earned it were
+ * lifted into the top layer and the weakest dropped out of a part grown too long, and notes that went
+ * stale or did not fit were retired. A note put in or out of the top layer by hand is left where it is.
+ */
+export const Consolidated = record(
+  "memory.consolidated",
+  z.object({
+    memory: MemoryName,
+    merged: z.array(z.object({ note: NoteId, into: NoteId })),
+    lifted: z.array(NoteId),
+    dropped: z.array(NoteId),
+    retired: z.array(NoteId),
+  }),
+);
+
 /** The record types the module declares. */
-export const MEMORY_TYPES = [NoteWritten, NoteCorroborated, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered] as const;
+export const MEMORY_TYPES = [NoteWritten, NoteCorroborated, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered, Consolidated] as const;
 
 /** Where a note stands. */
-export const NoteStatus = z.enum(["live", "retracted", "erased"]);
+export const NoteStatus = z.enum(["live", "retracted", "merged", "retired", "erased"]);
 export type NoteStatus = z.output<typeof NoteStatus>;
 
 /** A note as the memory holds it at a position of the journal. */
@@ -215,6 +231,8 @@ export const NoteView = z.object({
   pinned: z.boolean(),
   /** How many times its text was written: 1, and one more for each correction. */
   revision: z.number().int().positive(),
+  /** When the last record that changed it was written, in milliseconds since the epoch. */
+  changed: z.number().int().nonnegative(),
   /** The position of the journal where it was written, and of the last record that changed it. */
   written: z.number().int().nonnegative(),
   seq: z.number().int().nonnegative(),
@@ -431,4 +449,17 @@ export const memoryShare = actionRef("memory.share", {
     "The owner says whether a note about him may leave a memory for an address, without being asked. Only the owner may; his word holds for the note as it is now.",
   input: z.object({ memory: MemoryName, note: NoteId, for: Address, allowed: z.boolean() }),
   output: z.object({ note: NoteId, allowed: z.boolean() }),
+});
+
+export const memoryConsolidate = actionRef("memory.consolidate", {
+  description:
+    "Consolidates a memory: merges notes that say the same, lifts into the top layer the notes the owner confirmed or that have enough sources, drops the weakest from a part of the top layer grown too long, and retires notes that went stale unconfirmed or do not fit. Notes placed by hand are left where they are.",
+  input: z.object({ ...Named }),
+  output: z.object({
+    memory: MemoryName,
+    merged: z.array(z.object({ note: NoteId, into: NoteId })),
+    lifted: z.array(NoteId),
+    dropped: z.array(NoteId),
+    retired: z.array(NoteId),
+  }),
 });

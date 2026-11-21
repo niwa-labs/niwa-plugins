@@ -21,11 +21,14 @@ import type { TurnAuthor } from "@niwa-labs/agent/records";
 
 import { QuestionName, RequestAnswered, requestAsk } from "@niwa-labs/requests/records";
 
+import { consolidate } from "./consolidate.ts";
+import type { ConsolidationLimits } from "./consolidate.ts";
 import { release } from "./context.ts";
 import { Memories, sourceKey } from "./fold.ts";
 import type { TakenDigest } from "./fold.ts";
 import {
   MEMORY_TYPES,
+  Consolidated,
   DigestTaken,
   NoteConfirmed,
   NoteCorroborated,
@@ -40,6 +43,7 @@ import {
   ShareWanted,
   memoryBrief,
   memoryConfirm,
+  memoryConsolidate,
   memoryContext,
   memoryCorrect,
   memoryDrop,
@@ -75,15 +79,24 @@ export interface MemoryOptions {
   readonly limits?: Partial<MemoryLimits>;
 }
 
-/** How much a memory holds and shows. */
-export interface MemoryLimits {
+/** How much a memory holds and shows, and when it consolidates. */
+export interface MemoryLimits extends ConsolidationLimits {
   /** The most characters the top layer of a memory shows, headings included. Default 4000, about a thousand tokens. */
   readonly top: number;
   /** How many of the latest digests of sessions a search reads. Default 200. */
   readonly sessions: number;
+  /** How many records change a memory before a digest coming in consolidates it. Default 20. */
+  readonly consolidateEvery: number;
 }
 
-export const DEFAULT_LIMITS: MemoryLimits = { top: 4_000, sessions: 200 };
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The limits a memory keeps unless the composition says otherwise: three sources lift a note, each part
+ * of the top layer holds twelve, a memory holds five hundred notes, and an unconfirmed note of one source
+ * goes stale after thirty days without a change.
+ */
+export const DEFAULT_LIMITS: MemoryLimits = { top: 4_000, sessions: 200, consolidateEvery: 20, liftAfter: 3, topNotes: 12, notes: 500, staleAfter: 30 * DAY_MS };
 
 /** A refusal of the memory module: a memory the caller may not reach, a note it may not change. */
 export class MemoryRefusal extends Error {
@@ -185,6 +198,13 @@ export function memory(options: MemoryOptions = {}): Plugin {
       return reader;
     };
     const types = Memories.TYPES.map((name) => recordTypeName(name));
+
+    // The clock of the host: what a consolidation measures staleness by.
+    let clock: () => number = Date.now;
+    api.service((ctx) => {
+      clock = () => ctx.now();
+      return () => {};
+    });
 
     // The memories as they stand now, folded on from where the last read stopped.
     const live = new Memories();
@@ -489,6 +509,8 @@ export function memory(options: MemoryOptions = {}): Plugin {
         },
         { key: "taken" },
       );
+      // Enough has changed in the memory since it was last consolidated: it consolidates now.
+      if (now().changesOf(turn.agent) >= limits.consolidateEvery) await step(memoryConsolidate, { memory: turn.agent }, { key: "consolidate" });
     });
 
     api.offer(AGENT_BRIEFING, { title: "What it remembers", action: memoryBrief.name });
@@ -503,6 +525,24 @@ export function memory(options: MemoryOptions = {}): Plugin {
           const got = await ctx.step.outcome(agentGet, { agent: input.agent });
           const project = (got.status === "completed" ? got.value.definition.project?.cwd : undefined) ?? attachedLast(input.agent);
           return { text: topLayer(now().notesOf(memory), project, limits.top).text };
+        },
+      }),
+    );
+
+    api.action(
+      action(memoryConsolidate, {
+        // A consolidation made again finds its work done: it is planned from the memory as it stands.
+        recovery: "repeat",
+        effect: "record",
+        world: "niwa",
+        run: async (input, ctx) => {
+          const { memory } = reach(ctx, input.memory);
+          const memories = now();
+          const done = consolidate(memories.notesOf(memory), limits, clock(), (note, merged) =>
+            memories.sourcesWith(memory, note.note, merged.map((one) => one.note)),
+          );
+          await ctx.emit(Consolidated, { memory, ...done });
+          return { memory, ...done };
         },
       }),
     );
