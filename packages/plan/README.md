@@ -22,3 +22,6 @@ What an agent ticks off while it works is not here: that checklist is read throu
 its session.
 
 Another plugin or a script reads the records through `@niwa-labs/plan/records`.
+
+In the cockpit (`./cockpit`) the plans are listed with the ones that wait for a decision first. A plan opens
+with its items, how many are done, and any revision, each shown with what it changed from the one before.

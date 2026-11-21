@@ -12,9 +12,11 @@
  * A plan is folded from `plan.revised` records on every read; the records are the only state.
  */
 
+import { fileURLToPath } from "node:url";
+
 import { CatchableError, NotSent, action, recordId, resolveQuery, stableJson } from "@niwa-labs/core";
 import type { JournalReader } from "@niwa-labs/core";
-import { plugin } from "@niwa-labs/plugin";
+import { COCKPIT_MODULE, plugin } from "@niwa-labs/plugin";
 import type { Plugin } from "@niwa-labs/plugin";
 
 import { PLAN_TYPES, PlanRevised, planGet, planList, planSet } from "./records.ts";
@@ -74,6 +76,8 @@ function viewOf(list: readonly Revision[], revision: number): PlanView {
 export function plan(): Plugin {
   return plugin("plan", (api) => {
     api.declare(...PLAN_TYPES);
+    // The page of this plugin in the cockpit: a client module, offered by the path of its source.
+    api.offer(COCKPIT_MODULE, { id: "plan", entry: fileURLToPath(new URL("./cockpit/index.tsx", import.meta.url)) });
 
     // The plans are read from the journal: with none to read there is no history, and that is said,
     // not shown as a history with nothing in it.
