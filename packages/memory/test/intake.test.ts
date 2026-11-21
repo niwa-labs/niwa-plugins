@@ -3,7 +3,7 @@
 
 import { afterEach, expect, test } from "bun:test";
 
-import { AgentAttached, AgentTurnQueued } from "@niwa-labs/agent/records";
+import { AgentAttached, AgentDetached, AgentTurnQueued } from "@niwa-labs/agent/records";
 
 import { closeAll, dataOf, memoryHost, rin, until } from "./fixtures/host.ts";
 
@@ -47,4 +47,23 @@ test("each agent takes its own digests, and the oldest beyond the limit are no l
   expect((await host.as<Hits>({ kind: "agent", id: "bob" }, "memory.search", { query: "billing" })).hits.map((hit) => hit.id)).toEqual(["fact-000001"]);
   expect((await host.as<Hits>(rin, "memory.search", { query: "alpha" })).hits).toEqual([]);
   expect((await host.as<Hits>(rin, "memory.search", { query: "gamma" })).hits.map((hit) => hit.id)).toEqual(["fact-000102"]);
+});
+
+test("the project of a digest is where its session was attached when the digest was told, however the directory is spelled", async () => {
+  // The records are written before the memory is on the host, so the memory takes them in later, in order.
+  const before = await memoryHost({}, { without: true });
+  await before.host.emit(AgentAttached, { agent: "rin", session: "claude s-1", cwd: "/work//billing/./" });
+  const told = await before.host.emit(AgentTurnQueued, digest("rin", "fact-a1b2c3", "The session paused. What it did:\nThe owner: move invoices to hourly"));
+  await before.host.emit(AgentAttached, { agent: "rin", session: "claude s-1", cwd: "/work/shop" });
+  await before.host.emit(AgentTurnQueued, digest("rin", "fact-d4e5f6", "The session paused. What it did:\nThe owner: rename the shop"));
+  await before.host.emit(AgentDetached, { agent: "rin", session: "claude s-1" });
+  await before.host.emit(AgentTurnQueued, digest("rin", "fact-0a0b0c", "The session ended. What it did:\nThe owner: nothing more"));
+  const host = await memoryHost({}, { home: await before.leave() });
+  const records = await until(host, "memory.digest.taken", 3);
+  expect(dataOf(records, "memory.digest.taken")).toMatchObject([
+    { record: told.id, project: "/work/billing" },
+    { turn: "fact-d4e5f6", project: "/work/shop" },
+    { turn: "fact-0a0b0c" },
+  ]);
+  expect((dataOf(records, "memory.digest.taken")[2] as { project?: string }).project).toBeUndefined();
 });

@@ -88,8 +88,9 @@ as it was then.
 ## Intake and consolidation
 
 Each digest of an attached session (`SessionDigestTaken`) is recorded as a
-pointer to the turn that carried it, with the session and its directory as
-the project. The digest is searchable, but no note is made from it
+pointer to the turn that carried it, with the session and, as the project,
+the directory the session was attached in when the digest was told (none if
+it had been attached to another agent or let go of since). The digest is searchable, but no note is made from it
 automatically. Notes are written by the agent itself, which receives the
 digest as a turn.
 

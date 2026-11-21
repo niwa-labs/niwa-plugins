@@ -19,7 +19,7 @@ import { action, agent as agentAddress, addressText, confirmOptions, isYes, owne
 import type { ActionContext, Address, Caller, JournalReader, Step } from "@niwa-labs/core";
 import { COCKPIT_MODULE, plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
-import { AGENT_BRIEFING, AgentAttached, AgentTurnQueued, SessionDigestTaken, agentGet } from "@niwa-labs/agent/records";
+import { AGENT_BRIEFING, AgentAttached, AgentDetached, AgentTurnQueued, SessionDigestTaken, agentGet } from "@niwa-labs/agent/records";
 import type { TurnAuthor } from "@niwa-labs/agent/records";
 
 import { QuestionName, RequestAnswered, requestAsk, requestCancel, requestFind, requestGet } from "@niwa-labs/requests/records";
@@ -532,20 +532,36 @@ export function memory(options: MemoryOptions = {}): Plugin {
       }),
     );
 
-    /** The directory the session attached to an agent last works in; with `session`, the directory of that session. */
-    const attachedLast = (agent: string, session?: string): string | undefined => {
+    /** The directory the session attached to an agent last works in. */
+    const attachedLast = (agent: string): string | undefined => {
       let cwd: string | undefined;
       for (const stored of journal().since(seq(0), [recordTypeName(AgentAttached.name)])) {
         const parsed = AgentAttached.schema.safeParse(stored.data);
-        if (parsed.success && parsed.data.agent === agent && (session === undefined || parsed.data.session === session)) cwd = parsed.data.cwd;
+        if (parsed.success && parsed.data.agent === agent) cwd = parsed.data.cwd;
       }
-      return cwd === undefined ? undefined : canonicalDirectory(cwd);
+      return directoryOf(cwd);
+    };
+
+    /**
+     * The directory a session was attached to an agent in when the record at `before` was written: its latest
+     * attachment up to there, none when it was attached to another agent since, or let go of.
+     */
+    const attachedAt = (agent: string, session: string, before: number): string | undefined => {
+      let attached: { agent: string; cwd: string } | undefined;
+      for (const stored of journal().since(seq(0), [recordTypeName(AgentAttached.name), recordTypeName(AgentDetached.name)])) {
+        if (Number(stored.seq) >= before) break;
+        const was = dataAs(stored, AgentAttached);
+        if (was !== undefined && was.session === session) attached = { agent: was.agent, cwd: was.cwd };
+        const gone = dataAs(stored, AgentDetached);
+        if (gone !== undefined && gone.session === session && gone.agent === attached?.agent) attached = undefined;
+      }
+      return attached?.agent === agent ? directoryOf(attached.cwd) : undefined;
     };
 
     // The digests of attached sessions reach the memory of their agent: where the digest is, not a copy.
     api.on(SessionDigestTaken, { id: "digest-intake", from: "start" }, async (turn, step, told) => {
       if (turn.source?.kind !== "session-digest") return;
-      const project = attachedLast(turn.agent, turn.source.session);
+      const project = attachedAt(turn.agent, turn.source.session, Number(told.seq));
       await step.emit(
         DigestTaken,
         {

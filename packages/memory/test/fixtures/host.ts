@@ -94,7 +94,12 @@ export interface MemoryHost {
   as<O = unknown>(who: Address | undefined, name: string, input: unknown): Promise<O>;
   records(): Promise<StoredRecord[]>;
   close(): Promise<void>;
+  /** Close the host and keep its home, for a host that is opened on the same home later, which then removes it. */
+  leave(): Promise<Home>;
 }
+
+/** A home a host runs in, and the way to remove it. */
+type Home = Awaited<ReturnType<typeof tempHome>>;
 
 const open: MemoryHost[] = [];
 
@@ -108,8 +113,8 @@ export const bob: Address = { kind: "agent", id: "bob" };
 export { owner };
 
 /** A host with the memory module; the options are the module's, `agents` the agents the stand-in knows. */
-export async function memoryHost(options: Omit<MemoryOptions, "bind"> = {}, more: { agents?: AgentDefinitionInput[]; after?: Plugin[]; hold?: Promise<void> } = {}): Promise<MemoryHost> {
-  const home = await tempHome();
+export async function memoryHost(options: Omit<MemoryOptions, "bind"> = {}, more: { agents?: AgentDefinitionInput[]; after?: Plugin[]; hold?: Promise<void>; home?: Home; without?: boolean } = {}): Promise<MemoryHost> {
+  const home = more.home ?? (await tempHome());
   const clock = testClock(Date.UTC(2026, 10, 1));
   const niwa = createNiwa({ home: home.path, clock });
   let speaking: Address | undefined;
@@ -120,7 +125,7 @@ export async function memoryHost(options: Omit<MemoryOptions, "bind"> = {}, more
     return undefined;
   };
   const { plugin: module, actions } = capturing(memory({ ...options, bind }));
-  niwa.use(...baseStack().plugins, agentsStandIn(more.agents, more.hold), module, ...(more.after ?? []));
+  niwa.use(...baseStack().plugins, agentsStandIn(more.agents, more.hold), ...(more.without === true ? [] : [module]), ...(more.after ?? []));
   await niwa.serve();
   let closed = false;
   const made: MemoryHost = {
@@ -156,6 +161,12 @@ export async function memoryHost(options: Omit<MemoryOptions, "bind"> = {}, more
       closed = true;
       await niwa.close();
       await home.cleanup();
+    },
+    async leave() {
+      if (closed) return home;
+      closed = true;
+      await niwa.close();
+      return home;
     },
   };
   open.push(made);
