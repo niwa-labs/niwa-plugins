@@ -60,7 +60,7 @@ const memory = plugin("memory", (api) => {
         const at = input.at ?? 0;
         return {
           at,
-          items: [{ text: "The owner indents Go with tabs.", source: { owner: { kind: "agent", id: input.memory }, note: "note-5e1f0a2b", seq: at } }],
+          items: [{ text: "The owner indents Go with tabs.", source: { owner: { kind: "agent" as const, id: input.memory }, note: "note-5e1f0a2b", seq: at } }],
           withheld: [{ note: "note-00000001" }, { note: "note-00000002" }],
         };
       },

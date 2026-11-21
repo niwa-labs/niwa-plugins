@@ -26,7 +26,7 @@ const dataOwner = plugin("memory", (api) => {
         const at = input.at ?? 7;
         return {
           at,
-          items: [{ text: "Reviews are done in the morning.", source: { owner: { kind: "agent", id: input.memory }, note: "note-1a2b3c4d", seq: at } }],
+          items: [{ text: "Reviews are done in the morning.", source: { owner: { kind: "agent" as const, id: input.memory }, note: "note-1a2b3c4d", seq: at } }],
           withheld: [{ note: "note-9f8e7d6c" }],
         };
       },

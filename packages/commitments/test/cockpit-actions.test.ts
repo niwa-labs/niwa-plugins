@@ -10,13 +10,13 @@ import { commitmentCancel, commitmentList } from "../src/records.ts";
 import { cancelAction, listAction } from "../src/cockpit/actions.ts";
 
 test("the cards are read from what the host answers", () => {
-  expect(listAction.name).toBe(String(commitmentList.name));
+  expect(String(listAction.name)).toBe(String(commitmentList.name));
   expect(unsendable(listAction.input, commitmentList.input)).toEqual([]);
   expect(unreadable(listAction.output, commitmentList.output)).toEqual([]);
 });
 
 test("a card's cancel sends what the host takes", () => {
-  expect(cancelAction.name).toBe(String(commitmentCancel.name));
+  expect(String(cancelAction.name)).toBe(String(commitmentCancel.name));
   expect(unsendable(cancelAction.input, commitmentCancel.input)).toEqual([]);
   expect(unreadable(cancelAction.output, commitmentCancel.output)).toEqual([]);
 });

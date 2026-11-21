@@ -284,7 +284,7 @@ test("the list and the briefing show where each promise stands", async () => {
   await w.rin.call(commitmentMake, { text: "Ask the owner about Friday", to: "rin", party: "owner" });
 
   const all = await w.owner.call(commitmentList, {});
-  expect(all.items.map((item) => [item.description, item.status])).toEqual([
+  expect(all.items.map((item): string[] => [item.description, item.status])).toEqual([
     ["Write the report", "open"],
     ["Fix the typo", "kept"],
     ["Ask the owner about Friday", "proposed"],
