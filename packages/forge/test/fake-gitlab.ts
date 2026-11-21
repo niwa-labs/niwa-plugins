@@ -424,6 +424,11 @@ export class FakeGitLab {
         return { status: 200, body: this.#jobJson(job) };
       }
     }
+    if (method === "GET" && rest.startsWith("/repository/branches/")) {
+      const name = decodeURIComponent(rest.slice("/repository/branches/".length));
+      const id = project.branches.get(name);
+      return id === undefined ? notFound : { status: 200, body: { name, commit: { id } } };
+    }
     if (method === "GET" && rest === "/events") {
       const items = [...project.events].sort((a, b) => (query["sort"] === "asc" ? a.id - b.id : b.id - a.id));
       return { status: 200, body: items };

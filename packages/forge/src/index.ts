@@ -365,7 +365,25 @@ export function forge(options: ForgeOptions): Plugin {
         world: "external",
         async run(input) {
           const repo = await repoOf(input.repo);
-          return pullRequestOf(repo, await gitlab(repo.host).get<GitLabMr>(projectPath(repo, `/merge_requests/${String(input.number)}`)));
+          const client = gitlab(repo.host);
+          const path = `/merge_requests/${String(input.number)}`;
+          const mr = await client.get<GitLabMr>(projectPath(repo, path));
+          const pr = pullRequestOf(repo, mr);
+          if (!input.landing || pr.state !== "open") return pr;
+          const raw = await client.list<GitLabPipeline>(projectPath(repo, `${path}/pipelines`));
+          const ref = `refs/merge-requests/${input.number}`;
+          const latest = new Map<string, GitLabPipeline>();
+          for (const pipeline of raw) {
+            if (pipeline.ref !== `${ref}/head` && pipeline.ref !== `${ref}/merge`) continue;
+            if ((latest.get(pipeline.ref)?.id ?? 0) < pipeline.id) latest.set(pipeline.ref, pipeline);
+          }
+          const pipelines = (await pipelinesOf(repo, [...latest.values()])).filter(one => one.sourceSha === pr.head);
+          const target = await client.get<{ commit: { id: string } }>(projectPath(repo, `/repository/branches/${encodeURIComponent(pr.base)}`)).catch((error: unknown) => {
+            if (error instanceof ForgeError && error.code === "not-found") return undefined;
+            throw error;
+          });
+          if (!target) return pr;
+          return { ...pr, landing: { targetSha: target.commit.id, pipelines, conditionalMerge: false } };
         },
       }),
     );
@@ -624,6 +642,7 @@ export function forge(options: ForgeOptions): Plugin {
         world: "external",
         destructive: true,
         async run(input, ctx) {
+          if (input.expectTarget !== undefined) return { outcome: "refused" as const, why: "GitLab cannot condition a merge on the target commit" };
           const repo = await repoOf(input.repo);
           return during(ctx.operationId, () => merge(
             gitlab(repo.host),

@@ -37,6 +37,8 @@ export const PullRequest = z.strictObject({
   branch: z.string().min(1),
   base: z.string().min(1),
   head: Sha,
+  /** Live target tip and latest MR-specific head and merged-result pipelines when requested. */
+  landing: z.strictObject({ targetSha: Sha, pipelines: z.array(Pipeline), conditionalMerge: z.boolean() }).optional(),
   draft: z.boolean(),
   author: z.string().optional(),
   /** The commit the merge made, for a merged pull request. */
@@ -107,7 +109,7 @@ export const forgeRepoStatus = actionRef("forge.repo.status", {
 
 export const forgePrRead = actionRef("forge.pr.read", {
   description: "Read a pull request (a GitLab merge request) by its number: state, title, branches, head, draft, merge.",
-  input: z.strictObject({ repo: RepoName, number: Number_ }),
+  input: z.strictObject({ repo: RepoName, number: Number_, landing: z.boolean().optional() }),
   output: PullRequest,
   target: (input) => repoTarget(input.repo),
 });
@@ -291,6 +293,8 @@ export const forgePrMerge = actionRef("forge.pr.merge", {
     repo: RepoName,
     number: Number_,
     expectHead: Sha,
+    /** Refuse unless the server can atomically compare the target SHA too. */
+    expectTarget: Sha.optional(),
     method: MergeMethod,
     when: MergeWhen.optional(),
   }),

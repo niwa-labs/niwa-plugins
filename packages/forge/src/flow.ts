@@ -134,13 +134,13 @@ export type LandOutcome = { outcome: "merged"; sha: string } | { outcome: "refus
  */
 export async function land(
   key: string,
-  opts: { pr: PrRefGiven; expectHead: string; method: "merge" | "squash" | "rebase"; auto?: boolean; deadline?: Duration },
+  opts: { pr: PrRefGiven; expectHead: string; expectTarget?: string; method: "merge" | "squash" | "rebase"; auto?: boolean; deadline?: Duration },
 ): Promise<LandOutcome> {
   const api = script();
   const repo = nameOf(opts.pr.repo);
   const asked = (await api.call(
     forgePrMerge.name,
-    { repo, number: opts.pr.number, expectHead: opts.expectHead, method: opts.method, when: opts.auto === true ? "pipeline" : "now" },
+    { repo, number: opts.pr.number, expectHead: opts.expectHead, ...(opts.expectTarget === undefined ? {} : { expectTarget: opts.expectTarget }), method: opts.method, when: opts.auto === true ? "pipeline" : "now" },
     { label: `${key}-merge` },
   )) as MergeOutcome;
   if (asked.outcome === "merged") return { outcome: "merged", sha: asked.sha };

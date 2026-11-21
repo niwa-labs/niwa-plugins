@@ -236,3 +236,16 @@ test("reopening a host finds an interrupted merge on an unwatched repository wit
     await restarted.close();
   }
 });
+
+test("an expected target commit refuses before any GitLab merge request", async () => {
+  const host = await served();
+  const target = sha("main-tip");
+  host.billing.branches.set("main", target);
+  expect((await host.niwa.call(forgePrRead, { repo: BILLING, number: 7, landing: true })).landing)
+    .toMatchObject({ targetSha: target, conditionalMerge: false });
+  for (const expectTarget of [target, sha("obsolete")]) {
+    expect(await host.niwa.call(forgePrMerge, { ...ask, expectTarget })).toMatchObject({ outcome: "refused" });
+  }
+  expect(host.server.seen("PUT", /\/merge$/)).toHaveLength(0);
+  expect(await host.records([MergeStarted.name])).toHaveLength(0);
+});
