@@ -1,1 +1,270 @@
-export {};
+/**
+ * The memory module: one memory implementation on a host, and a memory in it for every agent.
+ *
+ * A note is one conclusion with its source: whom it is about, the project it holds for, and whether the
+ * owner stands behind it. Everything the module knows is a record of the journal, folded when it is read,
+ * so a memory can be read as it stood at any position.
+ *
+ * An agent reaches its memory with its own address: the binding says which address a caller speaks as,
+ * and a caller bound to an agent reaches that agent's memory and no other. The owner reaches every
+ * memory; the host and the handlers of other plugins name the memory they mean.
+ */
+
+import { createHash } from "node:crypto";
+
+import { action, owner, recordTypeName, seq } from "@niwa-labs/core";
+import type { ActionContext, Address, Caller, JournalReader } from "@niwa-labs/core";
+import { plugin } from "@niwa-labs/plugin";
+import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
+import type { TurnAuthor } from "@niwa-labs/agent/records";
+
+import { Memories } from "./fold.ts";
+import {
+  MEMORY_TYPES,
+  NoteConfirmed,
+  NoteCorrected,
+  NoteErased,
+  NoteRetracted,
+  NoteWritten,
+  memoryConfirm,
+  memoryCorrect,
+  memoryErase,
+  memoryGet,
+  memoryList,
+  memoryNote,
+  memoryRetract,
+} from "./records.ts";
+import type { MemoryName, NoteId, NoteView } from "./records.ts";
+
+export * from "./records.ts";
+
+/** What the module is given. */
+export interface MemoryOptions {
+  /**
+   * The address a caller speaks as: the binding the composition gives the messages module, so a session
+   * of an agent speaks as the agent. Default: a client with the owner's token speaks as the owner, and
+   * nobody else speaks as anybody.
+   */
+  readonly bind?: CallerBinding;
+}
+
+/** A refusal of the memory module: a memory the caller may not reach, a note it may not change. */
+export class MemoryRefusal extends Error {
+  override name = "MemoryRefusal";
+  constructor(
+    readonly code: "not-yours" | "no-memory" | "not-owner" | "no-note" | "erased" | "unbound",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** The default binding: a client with the owner's token is the owner; nobody else is anybody. */
+function ownerOnly(caller: Caller): Address | undefined {
+  return caller.kind === "client" && caller.principal?.kind === "owner" ? owner : undefined;
+}
+
+/** The id of a note: a hash of the operation that wrote it, so a call made again names the same note. */
+function noteIdOf(operation: string): NoteId {
+  return `note-${createHash("sha256").update(operation).digest("hex").slice(0, 12)}`;
+}
+
+/** Whether a note holds now: neither taken back nor erased. */
+export function holds(note: NoteView): boolean {
+  return note.status === "live";
+}
+
+/** The memory module. */
+export function memory(options: MemoryOptions = {}): Plugin {
+  const bind = options.bind ?? ownerOnly;
+
+  return plugin("memory", (api) => {
+    api.declare(...MEMORY_TYPES);
+
+    const journal = (): JournalReader => {
+      const reader = api.journal?.();
+      if (reader === undefined) throw new Error("the memory is read from the journal, and the host is not serving it");
+      return reader;
+    };
+    const types = Memories.TYPES.map((name) => recordTypeName(name));
+
+    // The memories as they stand now, folded on from where the last read stopped.
+    const live = new Memories();
+    const now = (): Memories => {
+      for (const stored of journal().since(seq(live.seq), types)) live.apply(stored);
+      return live;
+    };
+    /** The memories as they stood right after the record at `at`. */
+    const asOf = (at: number | undefined): Memories => {
+      if (at === undefined) return now();
+      const then = new Memories();
+      for (const stored of journal().since(seq(0), types)) {
+        if (Number(stored.seq) > at) break;
+        then.apply(stored);
+      }
+      return then;
+    };
+
+    /** Who writes, as a note says it: the address the caller speaks as, or niwa itself. */
+    const authorOf = (caller: Caller): TurnAuthor => {
+      const bound = bind(caller);
+      if (bound !== undefined) return bound;
+      if (caller.kind === "handler") return { kind: "niwa", by: String(caller.handler) };
+      if (caller.kind === "host") return { kind: "niwa", by: "host" };
+      throw new MemoryRefusal("unbound", "the caller is not bound to an address, so it reaches no memory");
+    };
+
+    /**
+     * The memory a call reaches, and who makes it. An agent reaches its own; the owner and niwa itself
+     * name the one they mean; any other address reaches none.
+     */
+    const reach = (ctx: ActionContext, named: MemoryName | undefined): { memory: MemoryName; by: TurnAuthor } => {
+      const by = authorOf(ctx.caller);
+      if (by.kind === "agent") {
+        if (named !== undefined && named !== by.id) {
+          throw new MemoryRefusal("not-yours", `agent ${by.id} reaches only its own memory, not the memory of ${named}`);
+        }
+        return { memory: by.id as MemoryName, by };
+      }
+      if (by.kind !== "owner" && by.kind !== "niwa") {
+        throw new MemoryRefusal("not-yours", `${by.kind} ${"id" in by ? by.id : ""} has no memory of its own and reaches no other`);
+      }
+      if (named === undefined) throw new MemoryRefusal("no-memory", "name the memory: the agent whose memory it is");
+      return { memory: named, by };
+    };
+
+    const noteOf = (memories: Memories, memory: MemoryName, note: NoteId): NoteView => {
+      const found = memories.note(memory, note);
+      if (found === undefined) throw new MemoryRefusal("no-note", `the memory of ${memory} has no note ${note}`);
+      return found;
+    };
+    const changeable = (memory: MemoryName, note: NoteId): NoteView => {
+      const found = noteOf(now(), memory, note);
+      if (found.status === "erased") throw new MemoryRefusal("erased", `the note ${note} was erased`);
+      return found;
+    };
+
+    api.action(
+      action(memoryNote, {
+        // The id follows the operation: a call made again writes the same note once.
+        recovery: "repeat",
+        effect: "record",
+        world: "niwa",
+        run: async (input, ctx) => {
+          const { memory, by } = reach(ctx, input.memory);
+          if (input.source.kind === "owner" && by.kind !== "owner") {
+            throw new MemoryRefusal("not-owner", "only the owner gives a note the owner as its source: what someone else says of him is their word");
+          }
+          const note = noteIdOf(String(ctx.operationId));
+          await ctx.emit(NoteWritten, {
+            memory,
+            note,
+            text: input.text,
+            ...(input.detail === undefined ? {} : { detail: input.detail }),
+            about: input.about,
+            ...(input.project === undefined ? {} : { project: input.project }),
+            source: input.source,
+            by,
+          });
+          return { memory, note };
+        },
+      }),
+    );
+
+    api.action(
+      action(memoryGet, {
+        recovery: "repeat",
+        effect: "read",
+        world: "niwa",
+        run: (input, ctx) => {
+          const { memory } = reach(ctx, input.memory);
+          return noteOf(asOf(input.at), memory, input.note);
+        },
+      }),
+    );
+
+    api.action(
+      action(memoryList, {
+        recovery: "repeat",
+        effect: "read",
+        world: "niwa",
+        run: (input, ctx) => {
+          const { memory } = reach(ctx, input.memory);
+          const notes = now()
+            .notesOf(memory)
+            .filter(holds)
+            .filter((note) => input.about === undefined || note.about === input.about)
+            .filter((note) => input.project === undefined || note.project === undefined || note.project === input.project)
+            .reverse()
+            .slice(0, input.limit);
+          return { memory, notes };
+        },
+      }),
+    );
+
+    api.action(
+      action(memoryConfirm, {
+        recovery: "repeat",
+        effect: "record",
+        world: "niwa",
+        idempotent: true,
+        run: async (input, ctx) => {
+          if (bind(ctx.caller)?.kind !== "owner") throw new MemoryRefusal("not-owner", "only the owner confirms a note: a confirmation is his word");
+          const found = changeable(input.memory, input.note);
+          if (!found.confirmed) await ctx.emit(NoteConfirmed, { memory: input.memory, note: input.note, by: owner });
+          return { note: input.note, confirmed: true };
+        },
+      }),
+    );
+
+    api.action(
+      action(memoryCorrect, {
+        recovery: "repeat",
+        effect: "record",
+        world: "niwa",
+        run: async (input, ctx) => {
+          const { memory, by } = reach(ctx, input.memory);
+          const found = changeable(memory, input.note);
+          await ctx.emit(NoteCorrected, { memory, note: input.note, text: input.text, ...(input.detail === undefined ? {} : { detail: input.detail }), by });
+          return { note: input.note, revision: found.revision + 1 };
+        },
+      }),
+    );
+
+    api.action(
+      action(memoryRetract, {
+        recovery: "repeat",
+        effect: "record",
+        world: "niwa",
+        idempotent: true,
+        run: async (input, ctx) => {
+          const { memory, by } = reach(ctx, input.memory);
+          const found = changeable(memory, input.note);
+          if (found.status === "live") await ctx.emit(NoteRetracted, { memory, note: input.note, ...(input.reason === undefined ? {} : { reason: input.reason }), by });
+          return { note: input.note };
+        },
+      }),
+    );
+
+    api.action(
+      action(memoryErase, {
+        recovery: "repeat",
+        effect: "record",
+        world: "niwa",
+        idempotent: true,
+        destructive: true,
+        run: async (input, ctx) => {
+          const { memory, by } = reach(ctx, input.memory);
+          const found = noteOf(now(), memory, input.note);
+          if (found.status !== "erased") await ctx.emit(NoteErased, { memory, note: input.note, by });
+          return { note: input.note };
+        },
+      }),
+    );
+
+    api.summarize(() => {
+      const memories = api.journal?.() === undefined ? undefined : now();
+      return { notes: memories === undefined ? 0 : memories.count() };
+    });
+  });
+}
