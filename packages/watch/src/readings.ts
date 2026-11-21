@@ -6,7 +6,7 @@
  * record it cannot read is passed over and a plugin it does not know of is not required. Time is
  * given, never read: the same records and the same moment always give the same readings.
  *
- * The sources are: the turns, activity and progress of sessions, the pauses, scopes and steps of
+ * The sources are: the turns, activity and progress of sessions, the pauses, log, phases, scopes and steps of
  * runs, the requests and sleeps that hold either, a head that moved, and the watch's own flags.
  */
 
@@ -28,6 +28,7 @@ export const SOURCES: readonly string[] = [
   "git.head.moved",
   "workflow.run.*",
   "workflow.scope.*",
+  "workflow.phase.*",
   "niwa.invocation.resolved",
   "niwa.step.intent",
   "niwa.step.outcome",
@@ -348,6 +349,22 @@ export class Model {
         // It frees the pause it names: a hold shares the record, and a later pause is not the one that was released.
         if (track.manual?.id === data.data.pause) track.manual = undefined;
         track.last = at;
+        return;
+      }
+      case "workflow.run.log": {
+        const data = OfRun.safeParse(row.data);
+        const track = data.success ? this.attemptOf(row, data.data.run) : undefined;
+        if (track !== undefined) track.last = at;
+        return;
+      }
+      case "workflow.phase.entered":
+      case "workflow.phase.left": {
+        const data = OfRun.safeParse(row.data);
+        const track = data.success ? this.attemptOf(row, data.data.run) : undefined;
+        if (track === undefined) return;
+        // A script that moves to another phase is getting somewhere: what it repeated before is not a loop.
+        track.last = at;
+        track.streak = undefined;
         return;
       }
       case "workflow.scope.opened": {

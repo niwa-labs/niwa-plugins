@@ -376,6 +376,27 @@ describe("runs", () => {
     expect(modelOf(rows).readingOf(run, 7000)).toMatchObject({ state: "working" });
   });
 
+  test("a line the run wrote to its log is a sign of life, a line of an attempt before is not", () => {
+    const model = modelOf([...started(), intent("a", 1, 0), row("workflow.run.log", { run: "run-1", text: "halfway" }, 9 * MINUTE + 50_000, inv)]);
+    expect(model.readingOf(run, 19 * MINUTE)).toMatchObject({ state: "working", last: 9 * MINUTE + 50_000 });
+    expect(model.readingOf(run, 20 * MINUTE)).toMatchObject({ state: "stuck", kind: "silent" });
+    model.apply(row("workflow.run.log", { run: "run-1", text: "late" }, 15 * MINUTE, handler("inv-0")));
+    expect(model.readingOf(run, 20 * MINUTE)).toMatchObject({ last: 9 * MINUTE + 50_000 });
+  });
+
+  test("a phase the script enters or leaves is progress: a loop before it is over", () => {
+    const rows = [...started()];
+    for (let n = 1; n <= 6; n += 1) rows.push(intent(`k${n}`, { repo: "r" }, n * 1000));
+    const model = modelOf(rows);
+    expect(model.readingOf(run, 7000)?.state).toBe("looping");
+    model.apply(row("workflow.phase.entered", { run: "run-1", branch: "", phase: "Review" }, 8000, inv));
+    expect(model.readingOf(run, 9000)).toMatchObject({ state: "working", last: 8000 });
+    for (let n = 7; n <= 12; n += 1) model.apply(intent(`k${n}`, { repo: "r" }, n * 1000));
+    expect(model.readingOf(run, 13_000)?.state).toBe("looping");
+    model.apply(row("workflow.phase.left", { run: "run-1", branch: "" }, 14_000, inv));
+    expect(model.readingOf(run, 15_000)).toMatchObject({ state: "working", last: 14_000 });
+  });
+
   test("a record read twice is counted once", () => {
     const rows = [...started()];
     for (let n = 1; n <= 5; n += 1) rows.push(intent(`k${n}`, { repo: "r" }, n * 1000));
@@ -493,6 +514,8 @@ describe("what the service reads", () => {
       "workflow.run.pause-requested",
       "workflow.run.continued",
       "workflow.run.log",
+      "workflow.phase.entered",
+      "workflow.phase.left",
       "niwa.invocation.state",
       "niwa.invocation.resolved",
       "niwa.step.intent",
