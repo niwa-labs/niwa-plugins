@@ -309,3 +309,11 @@ export const forgeJobRun = actionRef("forge.job.run", {
   output: z.strictObject({ job: Number_, state: RunState }),
   target: (input) => refTarget(input.repo, input.ref),
 });
+
+// --- The push reaction ---------------------------------------------------------------------------
+
+export const forgePushConfig = actionRef("forge.push.config", {
+  description: "The local checkouts of each watched repository, `<host>/<path>` to absolute paths, as the push reaction reads them.",
+  input: z.strictObject({}),
+  output: z.strictObject({ checkouts: z.record(z.string(), z.array(z.string())) }),
+});

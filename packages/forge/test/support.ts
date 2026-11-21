@@ -50,6 +50,8 @@ export interface ForgeHostOptions {
   readonly env?: ForgeOptions["env"];
   /** More plugins, installed before forge. */
   readonly before?: readonly Plugin[];
+  /** More plugins, installed after forge. */
+  readonly after?: readonly Plugin[];
   readonly forge?: Partial<ForgeOptions>;
 }
 
@@ -70,7 +72,7 @@ export async function forgeHost(opts: ForgeHostOptions = {}) {
     forge({ servers: [{ host: HOST, url: server.url, token: secret("GITLAB_TOKEN") }], fetch: server.fetch, env: opts.env ?? {}, poll: false, ...opts.forge }),
   );
   const niwa = createNiwa({ home: home.path });
-  niwa.use(...(opts.before ?? []), module);
+  niwa.use(...(opts.before ?? []), module, ...(opts.after ?? []));
   await niwa.serve();
   const clients: NiwaApi[] = [];
   return {

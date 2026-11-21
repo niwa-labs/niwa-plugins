@@ -18,9 +18,12 @@
  * request header and nothing else. `fetch` may be given, so a test speaks to a fake server.
  */
 
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { action } from "@niwa-labs/core";
 import type { JournalReader } from "@niwa-labs/core";
-import { plugin } from "@niwa-labs/plugin";
+import { BUILTIN_WORKFLOW, plugin } from "@niwa-labs/plugin";
 import type { Plugin } from "@niwa-labs/plugin";
 
 import {
@@ -45,6 +48,7 @@ import {
   forgePrMergePending,
   forgePrRead,
   forgePrRetarget,
+  forgePushConfig,
   forgeRepoList,
   forgeRepoSync,
   forgeRepoUnwatch,
@@ -57,7 +61,7 @@ import { checksOf, kindOf, pipelineOf, pullRequestOf, runStateOf } from "./norma
 import { DEFAULT_INTERVALS, Poller, sync } from "./observe.ts";
 import type { PollIntervals } from "./observe.ts";
 import type { GitLabJob, GitLabMr, GitLabPipeline } from "./normalize.ts";
-import { FORGE_TYPES, MergeArmed, MergeDisarmed, RepoUnwatched, RepoWatched } from "./record-types.ts";
+import { FORGE_TYPES, MergeArmed, MergeDisarmed, Pushed, RepoUnwatched, RepoWatched } from "./record-types.ts";
 import type { Pipeline, Repo } from "./record-types.ts";
 import { resolveSecret } from "./secrets.ts";
 import { Servers, projectPath, repoKey, watchedRepos, watching } from "./servers.ts";
@@ -84,7 +88,16 @@ export interface ForgeOptions {
    * hour of quiet.
    */
   readonly poll?: Partial<PollIntervals> | false;
+  /**
+   * The built-in workflow that tells, on a push to a branch, which git worktrees were made from it
+   * and are now behind. It names the local checkouts of each repository, `<host>/<path>` to absolute
+   * paths. Off by default: it needs the workflow and git modules on the host.
+   */
+  readonly pushReaction?: { readonly checkouts: Readonly<Record<string, readonly string[]>> };
 }
+
+/** The script of the push reaction, as it ships with the module. */
+const PUSH_REACTION_SCRIPT = fileURLToPath(new URL("./workflows/push-reaction.ts", import.meta.url));
 
 /** The most bytes of a job log a read answers by default. */
 const LOG_BYTES = 65_536;
@@ -95,13 +108,35 @@ interface GitLabDiscussion {
   notes: Array<{ id: number; body: string; author?: { username?: string }; resolvable?: boolean; resolved?: boolean; system?: boolean }>;
 }
 
+/** A path with its links resolved, as the git module records a repository; the path itself when it does not exist. */
+function real(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 /** The forge module. */
 export function forge(options: ForgeOptions): Plugin {
   const fetchOf: FetchLike = options.fetch ?? ((url, init) => fetch(url, init));
   const env = options.env ?? process.env;
 
+  const checkouts = Object.fromEntries(
+    Object.entries(options.pushReaction?.checkouts ?? {}).map(([repo, paths]) => [repo, paths.map((path) => real(path))]),
+  );
+
   return plugin("forge", (api) => {
     api.declare(...FORGE_TYPES);
+    if (options.pushReaction !== undefined) {
+      api.offer(BUILTIN_WORKFLOW, {
+        name: "push-reaction",
+        file: PUSH_REACTION_SCRIPT,
+        description: "Tell which worktrees a push to their base left behind",
+        triggers: [Pushed],
+      });
+      api.action(action(forgePushConfig, { recovery: "repeat", effect: "read", world: "niwa", run: () => ({ checkouts }) }));
+    }
     const journal = (): JournalReader | undefined => api.journal?.();
     const servers = new Servers(options.servers, { home: () => api.home(), now: () => Date.now(), fetch: fetchOf, env });
     const gitlab = (host: string): GitLab => servers.client(host);
