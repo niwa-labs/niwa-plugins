@@ -11,6 +11,7 @@ export const RING: Record<CommitmentStatus, WorkState> = {
   open: "pending",
   due: "running",
   kept: "done",
+  "kept-late": "done",
   missed: "failed",
   cancelled: "stopped",
   declined: "skipped",
@@ -21,13 +22,7 @@ export function cancellable(status: CommitmentStatus): boolean {
   return status === "proposed" || status === "open" || status === "due";
 }
 
-/**
- * Whether a card offers its viewer a cancel: the commitment has not ended, the viewer may call the
- * action, and the host's rule could let him. The owner may cancel any; anyone else only what an agent
- * promised for itself, or a proposal it made. Whose promise it is, the host decides: it is the one that
- * knows the address a viewer speaks as.
- */
-export function canCancel(commitment: Pick<CommitmentItem, "status" | "party">, viewer: Pick<Viewer, "owner" | "can">): boolean {
-  if (!cancellable(commitment.status) || !viewer.can(cancelAction)) return false;
-  return viewer.owner || commitment.party === "self" || commitment.status === "proposed";
+/** Show the cancel control when both the caller's grant and the promise allow it. */
+export function canCancel(commitment: Pick<CommitmentItem, "canCancel">, viewer: Pick<Viewer, "can">): boolean {
+  return commitment.canCancel && viewer.can(cancelAction);
 }

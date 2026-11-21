@@ -133,6 +133,8 @@ test("an agent's own promise comes due into its inbox, and is missed when not do
   expect((await w.owner.call(commitmentGet, { id: made.id })).status).toBe("missed");
   expect(w.told).toHaveLength(2);
   expect(w.told[1]?.text).toContain("missed");
+  expect(await w.rin.call(commitmentDone, { id: made.id })).toMatchObject({ status: "kept-late" });
+  expect(await w.owner.call(commitmentGet, { id: made.id })).toMatchObject({ status: "kept-late" });
 });
 
 test("a promise done before its deadline is not delivered", async () => {
@@ -349,6 +351,8 @@ test("the list and the briefing show where each promise stands", async () => {
   await w.rin.call(commitmentMake, { text: "Ask the owner about Friday", to: "rin", party: "owner" });
 
   const all = await w.owner.call(commitmentList, {});
+  expect(all.items[0]).toMatchObject({ by: { kind: "agent", id: "rin" }, canCancel: true });
+  expect(all.items[1]).toMatchObject({ canCancel: false });
   expect(all.items.map((item): string[] => [item.description, item.status])).toEqual([
     ["Write the report", "open"],
     ["Fix the typo", "kept"],
@@ -430,4 +434,12 @@ test("a deadline a date cannot hold is refused, and so is a grace that ends befo
   expect(() => commitments({ graceMs: -1 })).toThrow(/graceMs/);
   expect(() => commitments({ graceMs: Number.NaN })).toThrow(/graceMs/);
   expect(await w.records("commitment.proposed")).toHaveLength(0);
+});
+
+test("competing completion and cancellation leave exactly one ending", async () => {
+  const w = await world();
+  const { id } = await w.rin.call(commitmentMake, { text: "Write the report", to: "rin" });
+  const result = await Promise.allSettled([w.rin.call(commitmentDone, { id }), w.owner.call(commitmentCancel, { id })]);
+  expect(result.filter(one => one.status === "fulfilled")).toHaveLength(1);
+  expect([...(await w.records("commitment.kept")), ...(await w.records("commitment.cancelled"))]).toHaveLength(1);
 });

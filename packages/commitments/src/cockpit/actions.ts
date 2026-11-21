@@ -9,13 +9,15 @@ import { z } from "zod";
 
 export const Address = z.object({ kind: z.string(), id: z.string().optional(), harness: z.string().optional() }).loose();
 
-export const CommitmentStatus = z.enum(["proposed", "open", "due", "kept", "missed", "cancelled", "declined"]);
+export const CommitmentStatus = z.enum(["proposed", "open", "due", "kept", "kept-late", "missed", "cancelled", "declined"]);
 export type CommitmentStatus = z.infer<typeof CommitmentStatus>;
 
 export const CommitmentItem = z.object({
   id: z.string(),
   description: z.string(),
   status: CommitmentStatus,
+  by: Address,
+  canCancel: z.boolean(),
   party: z.enum(["self", "owner"]),
   to: z.string(),
   due: z.number().optional(),

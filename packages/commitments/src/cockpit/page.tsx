@@ -15,7 +15,7 @@ function CommitmentCard({ commitment }: { commitment: CommitmentItem }) {
       <div className="flex min-w-0 flex-col">
         <span className="truncate text-sm font-medium">{commitment.description}</span>
         <span className="text-xs text-muted-foreground">
-          {commitment.id} · to {commitment.to}
+          {commitment.id} · by {commitment.by.kind}{commitment.by.harness ? ` ${commitment.by.harness}/` : " "}{commitment.by.id} · to {commitment.to}
           {commitment.due === undefined ? "" : ` · due ${new Date(commitment.due).toLocaleString()}`}
         </span>
       </div>

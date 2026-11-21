@@ -23,12 +23,8 @@ test("a card offers a cancel to the viewer who may call it and could be let", ()
   const owner = createViewer({ id: "owner", owner: true, actions: ["commitment.cancel"] });
   const agent = createViewer({ id: "session:rin", owner: false, actions: ["commitment.cancel"] });
   const reader = createViewer({ id: "reader", owner: false, actions: ["commitment.list"] });
-  const open = { status: "open", party: "owner" } as const;
-  expect(canCancel(open, owner)).toBe(true);
-  // What was promised for the owner is his to cancel; the host decides whose own promise it is.
-  expect(canCancel(open, agent)).toBe(false);
-  expect(canCancel({ status: "open", party: "self" }, agent)).toBe(true);
-  expect(canCancel({ status: "proposed", party: "owner" }, agent)).toBe(true);
-  expect(canCancel(open, reader)).toBe(false);
-  expect(canCancel({ status: "kept", party: "self" }, owner)).toBe(false);
+  expect(canCancel({ canCancel: true }, owner)).toBe(true);
+  expect(canCancel({ canCancel: false }, agent)).toBe(false);
+  expect(canCancel({ canCancel: true }, agent)).toBe(true);
+  expect(canCancel({ canCancel: true }, reader)).toBe(false);
 });

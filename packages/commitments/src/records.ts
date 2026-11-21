@@ -61,31 +61,48 @@ const Terms = {
   due: Moment.optional(),
 };
 
+type Phase = CommitmentStatus | "new";
+
+/** Check transitions against the last committed status of this promise. */
+function transition(next: CommitmentStatus, ...from: Phase[]) {
+  return { guard: {
+    group: "commitment",
+    key: (data: { id: string; basedOn?: Phase }) => data.id,
+    initial: (): Phase => "new",
+    admit: (phase: Phase, data: { id: string; basedOn?: Phase }) =>
+      from.includes(phase) && (data.basedOn === undefined || data.basedOn === phase)
+        ? undefined : { code: "commitment-closed", reason: `commitment ${data.id} is ${phase}` },
+    fold: (phase: Phase): Phase => next === "kept" && phase === "missed" ? "kept-late" : next,
+  } };
+}
+
 /** A commitment was made: it stands from now on. */
-export const CommitmentMade = record("commitment.made", z.object({ ...Terms, basis: CommitmentBasis }));
+export const CommitmentMade = record("commitment.made", z.object({ ...Terms, basis: CommitmentBasis }), transition("open", "new", "proposed"));
 
 /** An agent proposed a commitment for the owner: it stands only when he confirms it. */
-export const CommitmentProposed = record("commitment.proposed", z.object(Terms));
+export const CommitmentProposed = record("commitment.proposed", z.object(Terms), transition("proposed", "new"));
 
 /** The owner did not confirm a proposed commitment. */
-export const CommitmentDeclined = record("commitment.declined", z.object({ id: CommitmentId, request: RequestId.optional() }));
+export const CommitmentDeclined = record("commitment.declined", z.object({ id: CommitmentId, request: RequestId.optional() }), transition("declined", "proposed"));
 
 /** A commitment came due and was delivered to its agent's inbox. */
-export const CommitmentDelivered = record("commitment.delivered", z.object({ id: CommitmentId, due: Moment, at: Moment }));
+export const CommitmentDelivered = record("commitment.delivered", z.object({ id: CommitmentId, due: Moment, at: Moment }), transition("due", "open"));
 
 /** A commitment was done. */
 export const CommitmentKept = record(
   "commitment.kept",
-  z.object({ id: CommitmentId, by: Address.optional(), note: z.string().min(1).optional() }),
+  z.object({ id: CommitmentId, basedOn: z.enum(["open", "due", "missed"]), by: Address.optional(), note: z.string().min(1).optional() }),
+  transition("kept", "open", "due", "missed"),
 );
 
 /** A commitment was not done by its deadline and the grace after it. */
-export const CommitmentMissed = record("commitment.missed", z.object({ id: CommitmentId, due: Moment, at: Moment }));
+export const CommitmentMissed = record("commitment.missed", z.object({ id: CommitmentId, due: Moment, at: Moment }), transition("missed", "open", "due"));
 
 /** A commitment was cancelled: it is no longer promised. */
 export const CommitmentCancelled = record(
   "commitment.cancelled",
-  z.object({ id: CommitmentId, by: Address.optional(), reason: z.string().min(1).optional() }),
+  z.object({ id: CommitmentId, basedOn: z.enum(["open", "due", "proposed"]), by: Address.optional(), reason: z.string().min(1).optional() }),
+  transition("cancelled", "open", "due", "proposed"),
 );
 
 /**
@@ -142,11 +159,11 @@ export const COMMITMENT_TYPES = [
  * Where a commitment stands: proposed to the owner, open, due (delivered and waiting to be done),
  * or how it ended.
  */
-export const CommitmentStatus = z.enum(["proposed", "open", "due", "kept", "missed", "cancelled", "declined"]);
+export const CommitmentStatus = z.enum(["proposed", "open", "due", "kept", "kept-late", "missed", "cancelled", "declined"]);
 export type CommitmentStatus = z.infer<typeof CommitmentStatus>;
 
-/** The statuses after which nothing more happens to a commitment. */
-export const ENDED: readonly CommitmentStatus[] = ["kept", "missed", "cancelled", "declined"];
+/** Commitments in these states have left the active list. A missed one can still be kept late. */
+export const ENDED: readonly CommitmentStatus[] = ["kept", "kept-late", "missed", "cancelled", "declined"];
 
 /** The name of the question that asks the owner to confirm a proposed commitment. */
 export const CONFIRM_QUESTION: QuestionName = QuestionName.parse("commitment.confirm");
@@ -184,7 +201,7 @@ export const commitmentList = listRef("commitment.list", {
   noun: "commitment",
   detail: "Oldest first; the filters narrow by where it stands and by the agent it is delivered to.",
   filter: { status: CommitmentStatus.optional(), to: AgentName.optional() },
-  item: { status: CommitmentStatus, party: CommitmentParty, to: AgentName, due: Moment.optional() },
+  item: { by: Address, canCancel: z.boolean(), status: CommitmentStatus, party: CommitmentParty, to: AgentName, due: Moment.optional() },
 });
 
 /** One commitment, whole. */

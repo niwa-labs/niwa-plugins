@@ -111,19 +111,24 @@ function fold(rows: readonly StoredRecord[]): Map<string, Folded> {
     }
     const id = (row.data as { id?: string }).id;
     const known = id === undefined ? undefined : all.get(id);
-    if (known === undefined || ENDED.includes(known.status)) continue;
+    if (known === undefined) continue;
     if (row.type === CommitmentDelivered.name && known.status === "open") known.status = "due";
     else if (row.type === CommitmentMissed.name && (known.status === "due" || known.status === "open")) known.status = "missed";
     else if (row.type === CommitmentDeclined.name && known.status === "proposed") known.status = "declined";
-    else if (row.type === CommitmentKept.name && (known.status === "open" || known.status === "due")) {
+    else if (row.type === CommitmentKept.name && (known.status === "open" || known.status === "due" || known.status === "missed")) {
       const kept = CommitmentKept.schema.parse(row.data);
-      Object.assign(known, { status: "kept", endedBy: kept.by, note: kept.note });
-    } else if (row.type === CommitmentCancelled.name) {
+      Object.assign(known, { status: known.status === "missed" ? "kept-late" : "kept", endedBy: kept.by, note: kept.note });
+    } else if (row.type === CommitmentCancelled.name && !ENDED.includes(known.status)) {
       const cancelled = CommitmentCancelled.schema.parse(row.data);
       Object.assign(known, { status: "cancelled", endedBy: cancelled.by, note: cancelled.reason });
     }
   }
   return all;
+}
+
+function mayCancel(one: Folded, by: Address | undefined): boolean {
+  return by !== undefined && !ENDED.includes(one.status) && (same(by, OWNER) ||
+    (same(by, one.terms.by) && (one.terms.party === "self" || one.status === "proposed")));
 }
 
 /** The records of commitments, up to a position when one is given. */
@@ -275,12 +280,12 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
         run: async (input, ctx) => {
           const found = require(input.id);
           // Made again under the operation that already did it, it answers as it did.
-          if (wrote(ctx, CommitmentKept, found.id)) return { id: found.id, status: "kept" as const };
-          if (found.status !== "open" && found.status !== "due") throw new CommitmentClosed(found.id, found.status);
+          if (wrote(ctx, CommitmentKept, found.id)) return { id: found.id, status: found.status };
+          if (found.status !== "open" && found.status !== "due" && found.status !== "missed") throw new CommitmentClosed(found.id, found.status);
           const by = speaker(ctx);
           if (!same(by, OWNER) && !same(by, found.terms.by)) throw new DeniedError("only the one who made a commitment, or the owner, may say it is done");
-          await ctx.emit(CommitmentKept, { id: found.id, by, ...(input.note === undefined ? {} : { note: input.note }) });
-          return { id: found.id, status: "kept" as const };
+          await ctx.emit(CommitmentKept, { id: found.id, basedOn: found.status, by, ...(input.note === undefined ? {} : { note: input.note }) });
+          return { id: found.id, status: found.status === "missed" ? "kept-late" as const : "kept" as const };
         },
       }),
     );
@@ -293,17 +298,16 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
         run: async (input, ctx) => {
           const found = require(input.id);
           if (wrote(ctx, CommitmentCancelled, found.id)) return { id: found.id, status: "cancelled" as const };
-          if (ENDED.includes(found.status)) throw new CommitmentClosed(found.id, found.status);
+          if (found.status !== "open" && found.status !== "due" && found.status !== "proposed") throw new CommitmentClosed(found.id, found.status);
           const by = speaker(ctx);
-          const maker = same(by, found.terms.by) && (found.terms.party === "self" || found.status === "proposed");
-          if (!same(by, OWNER) && !maker) {
+          if (!mayCancel(found, by)) {
             throw new DeniedError(
               found.terms.party === "owner"
                 ? "only the owner may cancel a commitment made for him"
                 : "only the one who made a commitment, or the owner, may cancel it",
             );
           }
-          await ctx.emit(CommitmentCancelled, { id: found.id, by, ...(input.reason === undefined ? {} : { reason: input.reason }) });
+          await ctx.emit(CommitmentCancelled, { id: found.id, basedOn: found.status, by, ...(input.reason === undefined ? {} : { reason: input.reason }) });
           return { id: found.id, status: "cancelled" as const };
         },
       }),
@@ -323,12 +327,14 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
         recovery: "repeat",
         effect: "read",
         world: "niwa",
-        run: async (input) => ({
+        run: async (input, ctx) => ({
           items: [...current().values()]
             .filter((one) => (input.status === undefined || one.status === input.status) && (input.to === undefined || one.terms.to === input.to))
             .map((one) => ({
               id: one.terms.id,
               description: one.terms.description,
+              by: one.terms.by,
+              canCancel: mayCancel(one, bind(ctx.caller)),
               status: one.status,
               party: one.terms.party,
               to: one.terms.to,

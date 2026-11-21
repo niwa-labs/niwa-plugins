@@ -13,10 +13,10 @@ A plugin for commitments: what was promised, by when, delivery, and whether it w
 - At the deadline an open commitment is told to its agent through `agent.notify`, and is delivered
   once the inbox took it; when it is still not done after the grace period (an hour by default), it
   is missed whether it was delivered or not, and the agent is told. A deadline and its grace must
-  fit in a date.
+  fit in a date. Completing a missed promise changes its status to `kept-late`.
 - `commitment.done` and `commitment.cancel` end it: the one who made it or the owner may; only the
   owner cancels a promise made for him. `commitment.list` and `commitment.get` show every one, and
-  each agent's briefing gets a section of its open commitments. In the cockpit every commitment is
+  the list includes its maker and whether the caller can cancel it. Each agent's briefing gets a section of its open commitments. In the cockpit every commitment is
   a card with a cancel button for the viewer who may use it (`./cockpit`).
 
 A script waits for or reads one commitment with the data typed, through the builders of
