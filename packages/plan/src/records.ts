@@ -50,18 +50,43 @@ export const PlanSubject = z
   .min(1)
   .refine((text) => text.isWellFormed(), { message: "a plan is of text with no unpaired UTF-16 surrogate" });
 
+const planGuard = {
+  group: "plan", key: (data: { of: string }) => data.of,
+  initial: () => 0,
+};
+
+function stale(revision: number, data: { of: string; basedOn: number }) {
+  return { code: "stale", reason: `the plan of "${data.of}" is at revision ${revision}, not ${data.basedOn}: read it again before revising` };
+}
+
+/** A set observed identical contents at this revision. Replay returns that same result. */
+export const PlanUnchanged = record("plan.unchanged", z.object({
+  of: PlanSubject, basedOn: z.number().int().positive(),
+}), { guard: {
+  ...planGuard,
+  admit: (revision, data) => revision === data.basedOn ? undefined : stale(revision, data),
+  fold: revision => revision,
+} });
+
 /** A revision of a plan was written: the whole plan as it stands from `rev` on. */
 export const PlanRevised = record(
   "plan.revised",
   z.object({
     /** What the plan is of. */
     of: PlanSubject,
+    basedOn: z.number().int().nonnegative(),
     /** The number of the revision, from 1, one more than the revision before it. */
     rev: z.number().int().positive(),
     /** What the plan is for, when it says. */
     goal: z.string().trim().min(1).optional(),
     items: PlanItems,
   }),
+  { guard: {
+    ...planGuard,
+    admit: (revision, data) => data.basedOn === revision && data.rev === revision + 1
+      ? undefined : stale(revision, data),
+    fold: (_revision, data) => data.rev,
+  } },
 );
 export type PlanRevisedData = z.infer<typeof PlanRevised.schema>;
 
@@ -74,7 +99,7 @@ export function planRevised(of: string, rev?: number): TypeQuery<PlanRevisedData
 }
 
 /** The record types the plan plugin declares. */
-export const PLAN_TYPES = [PlanRevised] as const;
+export const PLAN_TYPES = [PlanRevised, PlanUnchanged] as const;
 
 /** A plan at one revision, as `plan.get` shows it. */
 export const PlanView = z.object({
@@ -112,7 +137,7 @@ export function planTarget(of: string): string {
 export const planSet = actionRef("plan.set", {
   description:
     "Write a revision of the plan of `of`: its goal and the whole list of items, each with a state (`open` is a decision still ahead). " +
-    "The revision is numbered by the plan, one after the last. Items equal to the latest revision write nothing and return it. " +
+    "The revision is numbered by the plan, one after the last. Items equal to the latest revision return it without creating a revision. " +
     "Give `expect` the revision you based the change on to refuse it when someone revised the plan since.",
   input: z.object({
     of: PlanSubject,

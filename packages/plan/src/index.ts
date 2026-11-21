@@ -2,7 +2,7 @@
  * The plan plugin: revisable plans, read back at any revision.
  *
  * - **plan.set** writes the next revision of the plan of something: a goal and the whole list of
- *   items. A set that changes nothing writes nothing, so it may be made again after a cut-off call.
+ *   items. A set that changes nothing records which revision it returned.
  * - **plan.get** reads a plan at its latest revision, or at one asked for.
  * - **plan.list** lists the plans, and the ones with a decision still ahead.
  *
@@ -14,12 +14,12 @@
 
 import { fileURLToPath } from "node:url";
 
-import { CatchableError, NotSent, action, recordId, resolveQuery, stableJson } from "@niwa-labs/core";
+import { CatchableError, NotSent, RecordRefused, action, recordId, resolveQuery, stableJson } from "@niwa-labs/core";
 import type { JournalReader } from "@niwa-labs/core";
 import { COCKPIT_MODULE, plugin } from "@niwa-labs/plugin";
 import type { Plugin } from "@niwa-labs/plugin";
 
-import { PLAN_TYPES, PlanRevised, planGet, planList, planSet } from "./records.ts";
+import { PLAN_TYPES, PlanRevised, PlanUnchanged, planGet, planList, planSet } from "./records.ts";
 import type { PlanRevisedData, PlanSummary, PlanView } from "./records.ts";
 
 export * from "./records.ts";
@@ -91,55 +91,44 @@ export function plan(): Plugin {
     const historyOf = (of: string): Revision[] =>
       revisionsOf(journal().query(resolveQuery({ types: [PlanRevised], filter: { of } })));
 
-    // A set reads the latest revision and writes the next one. Sets of one plan wait for each
-    // other, so the number read is the number still free when the record is written.
-    const queues = new Map<string, Promise<unknown>>();
-    const serialized = <T>(of: string, work: () => Promise<T>): Promise<T> => {
-      const turn = (queues.get(of) ?? Promise.resolve()).then(work, work);
-      const tail = turn.catch(() => undefined);
-      queues.set(of, tail);
-      void tail.then(() => {
-        if (queues.get(of) === tail) queues.delete(of);
-      });
-      return turn;
-    };
-
     api.action(
       action(planSet, {
         // A call cut off before its outcome was known is made again under the same operation: it
-        // finds the revision it wrote, or writes it. A set that changes nothing writes nothing,
-        // so made again it finds the plan as it stands.
+        // finds its recorded revision or its receipt for an unchanged plan.
         recovery: "repeat",
         effect: "record",
         world: "niwa",
         idempotent: true,
-        run: (input, ctx) =>
-          serialized(input.of, async () => {
-            // The revision this very operation wrote is the answer, whatever came after it.
-            const born = journal().get(recordId(`${ctx.operationId}/emit/1`));
-            if (born !== undefined && born.type === PlanRevised.name) {
-              const written = born.data as PlanRevisedData;
-              if (written.of === input.of) return { of: written.of, rev: written.rev, revised: true };
-            }
-            const head = historyOf(input.of).at(-1);
-            const rev = head === undefined ? 0 : head.data.rev;
-            if (input.expect !== undefined && input.expect !== rev) {
-              throw new PlanRefusal(
-                "stale",
-                `the plan of "${input.of}" is at revision ${rev}, not ${input.expect}: read it again before revising`,
-              );
-            }
-            if (head !== undefined && contentOf(head.data) === contentOf(input)) {
+        run: async (input, ctx) => {
+          // The revision this very operation wrote is the answer, whatever came after it.
+          const born = journal().get(recordId(`${ctx.operationId}/emit/1`));
+          if (born !== undefined && born.type === PlanRevised.name) {
+            const written = born.data as PlanRevisedData;
+            if (written.of === input.of) return { of: written.of, rev: written.rev, revised: true };
+          }
+          if (born?.type === PlanUnchanged.name) {
+            const { of, basedOn } = PlanUnchanged.schema.parse(born.data);
+            return { of, rev: basedOn, revised: false };
+          }
+          const head = historyOf(input.of).at(-1);
+          const rev = head?.data.rev ?? 0;
+          const basedOn = input.expect ?? rev;
+          try {
+            if (basedOn === rev && head && contentOf(head.data) === contentOf(input)) {
+              await ctx.emit(PlanUnchanged, { of: input.of, basedOn });
               return { of: input.of, rev, revised: false };
             }
             await ctx.emit(PlanRevised, {
-              of: input.of,
-              rev: rev + 1,
+              of: input.of, basedOn, rev: basedOn + 1,
               ...(input.goal === undefined ? {} : { goal: input.goal }),
               items: input.items,
             });
-            return { of: input.of, rev: rev + 1, revised: true };
-          }),
+            return { of: input.of, rev: basedOn + 1, revised: true };
+          } catch (error) {
+            if (error instanceof RecordRefused && error.code === "stale") throw new PlanRefusal("stale", error.reason);
+            throw error;
+          }
+        },
       }),
     );
 

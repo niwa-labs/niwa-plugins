@@ -165,7 +165,7 @@ test("a set equal to the latest revision still answers to expect", async () => {
   });
 });
 
-test("a refusal is the caller's to catch, says which it is, and wrote nothing", async () => {
+test("a stale write records its refusal and leaves the plan unchanged", async () => {
   await withPlans(async (niwa) => {
     await niwa.call(planSet, { of: "p", items: [build] });
     const stale = await niwa.call(planSet, { of: "p", items: [decide], expect: 0 }).catch((error: unknown) => error);
@@ -173,6 +173,7 @@ test("a refusal is the caller's to catch, says which it is, and wrote nothing", 
     expect(stale).toBeInstanceOf(CatchableError);
     expect(stale).toMatchObject({ code: "stale", effectPossible: false });
     expect(effectPossibleAfter(stale)).toBe(false);
+    expect(await niwa.records.read({ types: ["niwa.record.refused"] })).toHaveLength(1);
     expect(await niwa.call(planGet, { of: "nothing" }).catch((error: unknown) => error)).toMatchObject({ code: "unknown-plan" });
     expect(await niwa.call(planGet, { of: "p", rev: 9 }).catch((error: unknown) => error)).toMatchObject({ code: "unknown-revision" });
   });
@@ -320,4 +321,23 @@ test("with no journal to read, the actions say so instead of showing no plans", 
     expect(error).toBeInstanceOf(NotSent);
     expect(error).toMatchObject({ message: expect.stringContaining("not serving") });
   }
+});
+
+test("two writers of the same expected revision cannot both commit", async () => {
+  await withPlans(async niwa => {
+    const results = await Promise.allSettled([build, decide].map(item =>
+      niwa.call(planSet, { of: "shared", expect: 0, items: [item] })));
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(await niwa.call(planGet, { of: "shared" })).toMatchObject({ rev: 1, revisions: 1 });
+  });
+});
+
+test("an unchanged plan returns its original revision after another writer revises it", async () => {
+  await withJournal(async probe => {
+    await probe.set("create", { of: "p", items: [build] });
+    const first = await probe.set("equal", { of: "p", items: [build] });
+    await probe.set("change", { of: "p", items: [decide] });
+    expect(await probe.set("equal", { of: "p", items: [build] })).toEqual(first);
+    expect(await probe.get({ of: "p" })).toMatchObject({ rev: 2 });
+  });
 });
