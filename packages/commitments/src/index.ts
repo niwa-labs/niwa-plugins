@@ -24,7 +24,7 @@ import type { ActionContext, Address, JournalReader, RecordId, Seq, Step, Stored
 import { AGENT_BRIEFING, agentNotify } from "@niwa-labs/agent/records";
 import { COCKPIT_MODULE, bindingOf, plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, MessagesOptions, Plugin } from "@niwa-labs/plugin";
-import { REQUEST_TYPES, RequestCancelled, RequestCreated, RequestExpired, fold as foldRequest, requestAsk, requestCancel } from "@niwa-labs/requests/records";
+import { REQUEST_TYPES, RequestAnswered, RequestCancelled, RequestCreated, RequestExpired, fold as foldRequest, requestAsk, requestCancel } from "@niwa-labs/requests/records";
 import { TimerSlept, timerSleepRequest } from "@niwa-labs/timer/records";
 import { fileURLToPath } from "node:url";
 
@@ -41,6 +41,7 @@ import {
   CommitmentMissed,
   CommitmentProposed,
   ENDED,
+  MAX_MOMENT,
   commitmentBriefing,
   commitmentCancel,
   commitmentDone,
@@ -112,7 +113,7 @@ function fold(rows: readonly StoredRecord[]): Map<string, Folded> {
     const known = id === undefined ? undefined : all.get(id);
     if (known === undefined || ENDED.includes(known.status)) continue;
     if (row.type === CommitmentDelivered.name && known.status === "open") known.status = "due";
-    else if (row.type === CommitmentMissed.name && known.status === "due") known.status = "missed";
+    else if (row.type === CommitmentMissed.name && (known.status === "due" || known.status === "open")) known.status = "missed";
     else if (row.type === CommitmentDeclined.name && known.status === "proposed") known.status = "declined";
     else if (row.type === CommitmentKept.name && (known.status === "open" || known.status === "due")) {
       const kept = CommitmentKept.schema.parse(row.data);
@@ -156,16 +157,35 @@ function sleepKeyOf(id: string, which: "due" | "grace"): string {
 }
 const SLEEP_KEY = /^commitment:(com-[0-9a-f]+):(due|grace)$/;
 
+/** What a record says in words, and who it says wrote them, by the shape of the record that holds them. */
+function wordsOf(row: StoredRecord | undefined): { text: string; author: { kind?: unknown } | undefined } | undefined {
+  const data = row?.data as
+    | { text?: unknown; body?: { text?: unknown }; from?: { kind?: unknown }; author?: { kind?: unknown } }
+    | null
+    | undefined;
+  if (data === null || data === undefined || typeof data !== "object") return undefined;
+  // A message, sent or received, holds its words in its body and its sender in `from`; a turn or a
+  // sentence a plugin relays holds them in `text`, with the author it names.
+  const text = typeof data.body?.text === "string" ? data.body.text : data.text;
+  if (typeof text !== "string" || text.trim().length === 0) return undefined;
+  return { text, author: typeof data.body?.text === "string" ? data.from : (data.author ?? data.from) };
+}
+
 /**
- * Whether a record is the owner's own words: it has words, and he wrote it, or the plugin that wrote it
- * says he is its author. What a client wrote names its author by the client alone: a client that may
- * write a record could write any author into it.
+ * The owner's own words in a record, or nothing when it is not his: it has words, and he wrote it, or
+ * the plugin that wrote it says he is its author. What a client wrote names its author by the client
+ * alone: a client that may write a record could write any author into it.
  */
-function isOwnersWord(row: StoredRecord | undefined): boolean {
-  const data = row?.data as { text?: unknown; from?: { kind?: unknown }; author?: { kind?: unknown } } | null | undefined;
-  if (row === undefined || typeof data?.text !== "string" || data.text.trim().length === 0) return false;
-  if (row.actor.kind === "client") return row.actor.principal?.kind === "owner";
-  return data.from?.kind === "owner" || data.author?.kind === "owner";
+function ownersWords(row: StoredRecord | undefined): string | undefined {
+  const words = wordsOf(row);
+  if (row === undefined || words === undefined) return undefined;
+  if (row.actor.kind === "client") return row.actor.principal?.kind === "owner" && (words.author === undefined || words.author.kind === "owner") ? words.text : undefined;
+  return words.author?.kind === "owner" ? words.text : undefined;
+}
+
+/** A text as it is compared when one is said to quote another: no case, one space between words, no closing mark. */
+function plain(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").replace(/[\s.!?,;:]+$/, "").trim();
 }
 
 /** When a moment is, as a person reads it. */
@@ -177,6 +197,7 @@ function when(at: number): string {
 export function commitments(opts: CommitmentsOptions = {}): Plugin {
   const bind: CallerBinding = bindingOf(opts.messages);
   const grace = opts.graceMs ?? DEFAULT_GRACE_MS;
+  if (!Number.isSafeInteger(grace) || grace < 0) throw new RangeError(`graceMs is a number of milliseconds, not negative: ${String(grace)}`);
   return plugin("commitments", (api) => {
     api.declare(...COMMITMENT_TYPES);
     // The cards of the commitments in the cockpit: a client module, offered by the path of its source.
@@ -194,6 +215,11 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
       if (found === undefined) throw new UnknownId(text, "commitment");
       return { ...found, id };
     };
+    /** Whether this very operation already wrote the record that ends the commitment: a call made again after it was cut off. */
+    const wrote = (ctx: ActionContext, type: typeof CommitmentKept | typeof CommitmentCancelled, id: CommitmentId): boolean => {
+      const born = journal()?.get(birthOf(ctx));
+      return born !== undefined && born.type === type.name && (born.data as { id?: string }).id === id;
+    };
     const speaker = (ctx: ActionContext): Address => {
       const address = bind(ctx.caller);
       if (address === undefined) throw new DeniedError("a commitment is made and ended by someone who speaks as an address; this caller speaks as none");
@@ -207,6 +233,9 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
         world: "niwa",
         run: async (input, ctx) => {
           const by = speaker(ctx);
+          if (input.due !== undefined && input.due + grace > MAX_MOMENT) {
+            throw new RangeError(`the deadline ${input.due} and the grace after it reach past the last moment a date holds`);
+          }
           const terms: Terms = {
             id: ids.issue(birthOf(ctx)),
             text: input.text,
@@ -216,15 +245,19 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
             party: input.party,
             ...(input.due === undefined ? {} : { due: input.due }),
           };
-          let basis: CommitmentBasis;
+          let basis: CommitmentBasis | undefined;
           if (same(by, OWNER)) basis = { kind: "owner" };
           else if (input.party === "self") basis = { kind: "own" };
           else if (input.basis !== undefined) {
-            if (!isOwnersWord(journal()?.get(recordId(input.basis.record)))) {
+            const said = ownersWords(journal()?.get(recordId(input.basis.record)));
+            if (said === undefined) {
               throw new DeniedError(`"${input.basis.record}" is not a record of the owner's words: a promise for the owner stands only on his word`);
             }
-            basis = input.basis;
-          } else {
+            // His words carry the promise as he worded it. What an agent rewords, or a deadline it
+            // reads into them, is its own: it stands once he confirms the terms as they are now.
+            if (input.due === undefined && plain(said).includes(plain(input.text))) basis = input.basis;
+          }
+          if (basis === undefined) {
             await ctx.emit(CommitmentProposed, terms);
             return { id: terms.id, status: "proposed" as const };
           }
@@ -241,6 +274,8 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
         world: "niwa",
         run: async (input, ctx) => {
           const found = require(input.id);
+          // Made again under the operation that already did it, it answers as it did.
+          if (wrote(ctx, CommitmentKept, found.id)) return { id: found.id, status: "kept" as const };
           if (found.status !== "open" && found.status !== "due") throw new CommitmentClosed(found.id, found.status);
           const by = speaker(ctx);
           if (!same(by, OWNER) && !same(by, found.terms.by)) throw new DeniedError("only the one who made a commitment, or the owner, may say it is done");
@@ -257,6 +292,7 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
         world: "niwa",
         run: async (input, ctx) => {
           const found = require(input.id);
+          if (wrote(ctx, CommitmentCancelled, found.id)) return { id: found.id, status: "cancelled" as const };
           if (ENDED.includes(found.status)) throw new CommitmentClosed(found.id, found.status);
           const by = speaker(ctx);
           const maker = same(by, found.terms.by) && (found.terms.party === "self" || found.status === "proposed");
@@ -331,6 +367,15 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
       }),
     );
 
+    /** Whether a proposal still waits for the owner, as the journal says now: an answer to one that ended decides nothing. */
+    const stillProposed = (id: CommitmentId): boolean => current().get(id)?.status === "proposed";
+    /** Whether the answer of a request is the owner's own: given by him, not found for him by a resolver. */
+    const ownersOwn = (request: string): boolean =>
+      (journal()?.since(seq(0), [RequestAnswered.name]) ?? []).some((stored) => {
+        const parsed = RequestAnswered.schema.safeParse(stored.data);
+        return parsed.success && parsed.data.id === request && parsed.data.by?.kind === "owner" && parsed.data.how === undefined;
+      });
+
     // A proposal is put to the owner. The asks wait side by side: one he leaves open holds no other.
     api.on(CommitmentProposed, { id: "commitment-confirm", concurrency: Infinity }, async (terms, step) => {
       const due = terms.due === undefined ? "" : ` by ${when(terms.due)}`;
@@ -348,11 +393,14 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
           from: terms.by,
         });
         if (!("answer" in asked)) return;
-        if (isYes(asked.answer)) await step.emit(CommitmentMade, { ...terms, basis: { kind: "owner-confirmed", request: asked.id } });
+        // The owner's confirmation is his own answer: a resolver that found one for him did not ask him.
+        if (!stillProposed(terms.id)) return;
+        if (isYes(asked.answer) && ownersOwn(asked.id)) await step.emit(CommitmentMade, { ...terms, basis: { kind: "owner-confirmed", request: asked.id } });
         else await step.emit(CommitmentDeclined, { id: terms.id, request: asked.id });
       } catch (error) {
         if (!(error instanceof RequestCancelled) && !(error instanceof RequestExpired)) throw error;
-        await step.emit(CommitmentDeclined, { id: terms.id, request: error.request });
+        // A proposal its author withdrew is not one the owner refused.
+        if (stillProposed(terms.id)) await step.emit(CommitmentDeclined, { id: terms.id, request: error.request });
       }
     });
 
@@ -391,21 +439,31 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
       await step(timerSleepRequest, { at: made.due, key: sleepKeyOf(made.id, "due") });
     });
 
-    // At the deadline an open commitment is delivered to its agent; after the grace a delivered one
-    // that is not done is missed. Each is decided as of its own wake, so the wakes run side by side,
-    // and an inbox that cannot be reached is a failed outcome that stops no other wake.
+    // At the deadline an open commitment is told to its agent; after the grace one that is not done is
+    // missed, delivered or not. Each is decided as of its own wake, so the wakes run side by side, and
+    // an inbox that cannot be reached is a failed outcome that stops no other wake: the commitment
+    // is not delivered, and the grace still ends it.
     api.on(TimerSlept, { id: "commitment-wake", requires: [TimerSlept], concurrency: Infinity }, async (wake, step, at) => {
       const matched = SLEEP_KEY.exec(wake.key);
       if (matched === null) return;
       const [, id, which] = matched;
       const found = id === undefined ? undefined : fold(rowsOf(journal(), at.seq)).get(id);
       const due = found?.terms.due;
-      if (found === undefined || due === undefined) return;
+      if (id === undefined || found === undefined || due === undefined) return;
+      // Done or cancelled after the wake was recorded, before this ran: that came first, and nothing
+      // the wake would say is true any more.
+      const outrun = (): boolean => {
+        const status = current().get(id)?.status;
+        return status === "kept" || status === "cancelled";
+      };
       if (which === "due" && found.status === "open") {
-        await step.emit(CommitmentDelivered, { id: found.terms.id, due, at: at.at });
-        await step.outcome(agentNotify, { agent: found.terms.to, text: `Commitment ${found.terms.id} is due now: ${found.terms.text}` });
+        if (outrun()) return;
+        const told = await step.outcome(agentNotify, { agent: found.terms.to, text: `Commitment ${found.terms.id} is due now: ${found.terms.text}` });
+        if (outrun()) return;
+        if (told.status === "completed") await step.emit(CommitmentDelivered, { id: found.terms.id, due, at: at.at });
         await step(timerSleepRequest, { at: due + grace, key: sleepKeyOf(found.terms.id, "grace") });
-      } else if (which === "grace" && found.status === "due") {
+      } else if (which === "grace" && (found.status === "due" || found.status === "open")) {
+        if (outrun()) return;
         await step.emit(CommitmentMissed, { id: found.terms.id, due, at: at.at });
         await step.outcome(agentNotify, { agent: found.terms.to, text: `Commitment ${found.terms.id} was missed: ${found.terms.text}` });
       }

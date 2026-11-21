@@ -7,8 +7,9 @@
  * period, it is missed. The one who made it, or the owner, says it is done; either may cancel it.
  *
  * An agent's own promise is its to make. A promise on the owner's behalf, or one that sets him a
- * deadline, comes only from his own words: he makes it himself, an agent cites a record of his
- * that says it, or he confirms what an agent proposed.
+ * deadline, comes only from his own words: he makes it himself, an agent quotes a record of his
+ * that says it, or he confirms what an agent proposed. A deadline cannot be read out of his words,
+ * so a promise that carries one, or that rewords what he said, is put to him as it stands.
  */
 
 import { Address, EntityDescription, IdText, actionRef, getRef, idSchema, listRef, queryOf, record } from "@niwa-labs/core";
@@ -25,8 +26,11 @@ export type CommitmentId = Id<"commitment">;
 export const CommitmentParty = z.enum(["self", "owner"]);
 export type CommitmentParty = z.infer<typeof CommitmentParty>;
 
-/** A moment in milliseconds since the epoch. */
-export const Moment = z.number().int().nonnegative();
+/** The last moment a date can hold, in milliseconds since the epoch. */
+export const MAX_MOMENT = 8_640_000_000_000_000;
+
+/** A moment in milliseconds since the epoch, one a date can hold. */
+export const Moment = z.number().int().nonnegative().max(MAX_MOMENT);
 
 /** Why a commitment stands: whose word made it. */
 export const CommitmentBasis = z.discriminatedUnion("kind", [
@@ -34,7 +38,7 @@ export const CommitmentBasis = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("own") }),
   /** The owner made it himself. */
   z.strictObject({ kind: z.literal("owner") }),
-  /** An agent made it from a record of the owner's words: a message or a turn he wrote. */
+  /** An agent made it from a record of the owner's words: a message or a turn he wrote, which holds the promise as worded. */
   z.strictObject({ kind: z.literal("owner-words"), record: z.string().min(1) }),
   /** The owner confirmed what an agent proposed, by answering this request. */
   z.strictObject({ kind: z.literal("owner-confirmed"), request: RequestId }),
@@ -149,7 +153,7 @@ export const CONFIRM_QUESTION: QuestionName = QuestionName.parse("commitment.con
 
 export const commitmentMake = actionRef("commitment.make", {
   description:
-    "Makes a commitment: what is promised, the agent whose inbox it is delivered to at its deadline, and the deadline if it has one, in milliseconds since the epoch. Your own promise (party self) stands at once. A promise on the owner's behalf or one that sets him a deadline (party owner) stands only from his words: cite a record he wrote that says it (basis owner-words), or it is proposed to him and stands once he confirms. Every commitment is listed with a way to cancel it.",
+    "Makes a commitment: what is promised, the agent whose inbox it is delivered to at its deadline, and the deadline if it has one, in milliseconds since the epoch. Your own promise (party self) stands at once. A promise on the owner's behalf or one that sets him a deadline (party owner) stands only from his words: cite a record he wrote that holds the promise as you word it, with no deadline of your own (basis owner-words). Otherwise, including any promise with a deadline, it is proposed to him and stands once he confirms it himself. Every commitment is listed with a way to cancel it.",
   input: z.strictObject({
     text: z.string().min(1),
     description: EntityDescription.optional(),

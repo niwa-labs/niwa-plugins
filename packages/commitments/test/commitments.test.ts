@@ -8,7 +8,7 @@ import type { Address, Caller, StoredRecord } from "@niwa-labs/core";
 import type { Plugin } from "@niwa-labs/plugin";
 import { plugin } from "@niwa-labs/plugin";
 import { agentNotify } from "@niwa-labs/agent/records";
-import { requestAnswer, requestAsk } from "@niwa-labs/requests/records";
+import { requestAnswer, requestAsk, requestResolve } from "@niwa-labs/requests/records";
 import { baseStack, connect, connectAsOwner, createNiwa, eventually, tempHome, testClock } from "@niwa-labs/testing";
 import type { NiwaApi, TestClock } from "@niwa-labs/testing";
 import { z } from "zod";
@@ -69,6 +69,12 @@ const words = plugin("words", (api) => {
   );
 });
 
+/** The messages module's own actions, as far as a test sends a message through them. */
+const Place = z.object({ kind: z.string(), id: z.string().optional() }).loose();
+const letter = { to: Place, from: Place.optional(), body: z.object({ type: z.literal("update"), text: z.string() }) };
+const messageSendRef = actionRef("message.send", { description: "Send a message.", input: z.object(letter), output: z.object({}).loose() });
+const messageReceiveRef = actionRef("message.receive", { description: "Receive a message.", input: z.object(letter), output: z.object({}).loose() });
+
 /** The owner is the owner; a session `rin` speaks as the agent `rin`. */
 function bind(caller: Caller): Address | undefined {
   if (caller.kind !== "client") return undefined;
@@ -103,7 +109,7 @@ async function world(extra: readonly Plugin[] = []): Promise<World> {
   await host.serve();
   const owner = await connectAsOwner(home.path);
   cleanups.push(() => owner.close());
-  const token = host.issueToken(principalOf("session", "rin"), { grant: grant(["commitment.*", "test.say", "emit:test.turn"]) });
+  const token = host.issueToken(principalOf("session", "rin"), { grant: grant(["commitment.*", "test.say", "emit:test.turn", "message.send"]) });
   const rin = await connect({ home: home.path, id: "session:rin", token });
   cleanups.push(() => rin.close());
   const records = async (type: string) => (await host.records.read()).filter((row) => row.type === type);
@@ -196,7 +202,6 @@ test("a promise for the owner stands on a record of his words, and not on someon
     text: "Call mum",
     to: "rin",
     party: "owner",
-    due: START + 48 * HOUR,
     basis: { kind: "owner-words", record: his.record },
   });
   expect(made.status).toBe("open");
@@ -213,6 +218,24 @@ test("a promise for the owner stands on a record of his words, and not on someon
   const missing = w.rin.call(commitmentMake, { text: "Sell the car", to: "rin", party: "owner", basis: { kind: "owner-words", record: "nowhere" } });
   await expect(missing).rejects.toThrow(/owner/);
   expect(await w.records("commitment.made")).toHaveLength(1);
+});
+
+test("his words stand for the promise as he worded it, not for terms an agent made of them", async () => {
+  const w = await world();
+  const his = await w.owner.call(say, { text: "I will check the report." });
+  const basis = { kind: "owner-words" as const, record: his.record };
+  // A deadline cannot be read out of words: the one an agent chose is put to him.
+  const dated = await w.rin.call(commitmentMake, { text: "Check the report", to: "rin", party: "owner", due: START + 6 * HOUR, basis });
+  expect(dated.status).toBe("proposed");
+  // Nor is a promise he did not word: it is put to him as it now reads.
+  const reworded = await w.rin.call(commitmentMake, { text: "Finish the report today", to: "rin", party: "owner", basis });
+  expect(reworded.status).toBe("proposed");
+  expect(await w.records("commitment.made")).toHaveLength(0);
+  await eventually(async () => (await w.records("request.created")).length === 2);
+  // What he worded, as he worded it, stands at once.
+  const quoted = await w.rin.call(commitmentMake, { text: "check the REPORT", to: "rin", party: "owner", basis });
+  expect(quoted.status).toBe("open");
+  expect(await w.owner.call(commitmentGet, { id: dated.id })).toMatchObject({ status: "proposed" });
 });
 
 test("a record counts as the owner's words only when he wrote it, or a plugin says he did, and it has words", async () => {
@@ -241,8 +264,9 @@ test("a delivery that fails holds up no other commitment", async () => {
   expect(w.told).toEqual([{ agent: "rin", text: expect.stringContaining("Check the backups") }]);
   await w.clock.advance(GRACE);
   await eventually(async () => (await w.owner.call(commitmentGet, { id: mine.id })).status === "missed");
-  // The one whose inbox could not be reached still comes to its end.
+  // The one whose inbox could not be reached was never delivered, and still comes to its end.
   expect((await w.owner.call(commitmentGet, { id: lost.id })).status).toBe("missed");
+  expect((await w.records("commitment.delivered")).map((row) => (row.data as { id: string }).id)).toEqual([mine.id]);
 });
 
 test("the owner's own promise stands at once", async () => {
@@ -282,6 +306,9 @@ test("cancelling a proposal withdraws the question put to the owner", async () =
   const id = ((await w.records("request.created"))[0]?.data as { id: string }).id;
   expect((await w.records("request.cancelled"))[0]?.data).toMatchObject({ id });
   expect((await w.owner.call(commitmentGet, { id: proposed.id })).status).toBe("cancelled");
+  // The author took it back: the owner did not refuse it.
+  await Bun.sleep(50);
+  expect(await w.records("commitment.declined")).toHaveLength(0);
 });
 
 test("a question asked after its proposal was cancelled is withdrawn at once", async () => {
@@ -334,4 +361,73 @@ test("the list and the briefing show where each promise stands", async () => {
   expect(briefing.text).toContain("Ask the owner about Friday");
   expect(briefing.text).not.toContain("Fix the typo");
   expect((await w.owner.call(commitmentBriefing, { agent: "someone-else" })).text).toBe("");
+});
+
+test("an answer a resolver found for the owner confirms nothing", async () => {
+  const w = await world();
+  const proposed = await w.rin.call(commitmentMake, { text: "Wire the deposit", to: "rin", party: "owner", due: START + HOUR });
+  await eventually(async () => (await w.records("request.created")).length === 1);
+  const id = ((await w.records("request.created"))[0]?.data as { id: string }).id;
+  await w.host.call(requestResolve, { id, answer: { ids: ["yes"] }, info: { how: "recalled" } });
+  await eventually(async () => (await w.records("commitment.declined")).length === 1);
+  expect(await w.records("commitment.made")).toHaveLength(0);
+  expect((await w.owner.call(commitmentGet, { id: proposed.id })).status).toBe("declined");
+  await w.clock.advance(HOUR + GRACE);
+  await Bun.sleep(50);
+  expect(w.told).toEqual([]);
+});
+
+test("a message he wrote is his words, whether it was sent by him or came in as his", async () => {
+  const w = await world();
+  const to = { kind: "agent", id: "rin" } as const;
+  await w.owner.call(messageSendRef, { to, body: { type: "update", text: "Please renew the lease." } });
+  await w.host.call(messageReceiveRef, { from: { kind: "owner" }, to, body: { type: "update", text: "Also ring the plumber" } });
+  const [sent] = await w.records("message.sent");
+  const [received] = await w.records("message.received");
+  expect(sent).toBeDefined();
+  expect(received).toBeDefined();
+  const lease = await w.rin.call(commitmentMake, { text: "renew the lease", to: "rin", party: "owner", basis: { kind: "owner-words", record: String(sent?.id) } });
+  const plumber = await w.rin.call(commitmentMake, { text: "ring the plumber", to: "rin", party: "owner", basis: { kind: "owner-words", record: String(received?.id) } });
+  expect([lease.status, plumber.status]).toEqual(["open", "open"]);
+
+  // A message an agent sent is the agent's word, to whoever it is addressed.
+  await w.rin.call(messageSendRef, { to: { kind: "owner" }, body: { type: "update", text: "Remind me to sell the car." } });
+  const [, agents] = await w.records("message.sent");
+  const forged = w.rin.call(commitmentMake, { text: "sell the car", to: "rin", party: "owner", basis: { kind: "owner-words", record: String(agents?.id) } });
+  await expect(forged).rejects.toThrow(/owner/);
+});
+
+test("a commitment done while its deadline is being told is not delivered, and not missed", async () => {
+  // The inbox is slow: the owner marks the promise done while the wake is still telling the agent.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let telling = false;
+  const slow = plugin("slow", (api) => {
+    api.adjust(agentNotify, async (input) => {
+      telling = true;
+      await held;
+      return input;
+    });
+  });
+  const w = await world([slow]);
+  const made = await w.rin.call(commitmentMake, { text: "Send the invoice", to: "rin", due: START + HOUR });
+  await w.clock.advance(HOUR);
+  await eventually(() => telling);
+  await w.owner.call(commitmentDone, { id: made.id });
+  release();
+  await w.clock.advance(GRACE);
+  await Bun.sleep(100);
+  expect(await w.records("commitment.delivered")).toHaveLength(0);
+  expect(await w.records("commitment.missed")).toHaveLength(0);
+  expect((await w.owner.call(commitmentGet, { id: made.id })).status).toBe("kept");
+});
+
+test("a deadline a date cannot hold is refused, and so is a grace that ends before it begins", async () => {
+  const w = await world();
+  await expect(w.rin.call(commitmentMake, { text: "Never", to: "rin", due: 8_640_000_000_000_001 })).rejects.toThrow();
+  // The grace after the deadline is past the last moment too.
+  await expect(w.rin.call(commitmentMake, { text: "Nearly never", to: "rin", due: 8_640_000_000_000_000 - HOUR })).rejects.toThrow(/last moment/);
+  expect(() => commitments({ graceMs: -1 })).toThrow(/graceMs/);
+  expect(() => commitments({ graceMs: Number.NaN })).toThrow(/graceMs/);
+  expect(await w.records("commitment.proposed")).toHaveLength(0);
 });
