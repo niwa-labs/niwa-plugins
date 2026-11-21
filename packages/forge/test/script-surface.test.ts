@@ -165,3 +165,21 @@ test("an automatic landing in a stored script ends when the merge is recorded, n
   await sync(host);
   expect(await resultOf(host, run)).toEqual({ status: "done", result: { outcome: "merged", sha: sha("merge-7") } });
 }, 60_000);
+
+test("a stored script waits until a pull request is merged or closed, whichever is recorded first", async () => {
+  const host = await served();
+  const mr = openMr(host);
+  await sync(host);
+  const id = await registeredByName(host, "ended.ts", [
+    'import { untilPrEnded } from "@niwa-labs/forge/flow";',
+    `const repo = ${REPO};`,
+    'export default workflow({ description: "Wait for the end of a pull request", uses: ["niwa.records.read"], output: z.json() }, async () =>',
+    '  untilPrEnded("ended", { pr: { repo, number: 7 }, timeout: "1h" }));',
+  ]);
+  const { run } = await call(host, "workflow.start", { id });
+  await suspended(host);
+  mr.state = "closed";
+  host.server.event(host.billing, { action_name: "closed", target_type: "MergeRequest", target_iid: 7, author: { username: "marge" } });
+  await sync(host);
+  expect(await resultOf(host, run)).toMatchObject({ status: "done", result: { ended: "closed", by: "marge" } });
+}, 60_000);

@@ -40,7 +40,7 @@ value never reaches the journal. `fetch` may be passed to speak to a fake server
   `await read.records(pipelineOf({ repo, sha }))`), and a handler subscribes to
   them. A pull request is `{ repo: { host, path }, number }`; a record's own
   `pr` is accepted as it is.
-- `/flow`: `untilPipeline`, `land` and `untilHeadMoved` for
+- `/flow`: `untilPipeline`, `land`, `untilPrEnded` and `untilHeadMoved` for
   workflow scripts, built on those queries. `land` with `auto`
   reads the pull request between its waits, so a script that uses it lists
   `forge.pr.read` on the repository next to `forge.pr.merge`.

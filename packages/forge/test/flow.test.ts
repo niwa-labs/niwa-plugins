@@ -6,7 +6,7 @@ import { afterEach, expect, test } from "bun:test";
 import { resolveQuery } from "@niwa-labs/core";
 
 import { forgePipelineRead, forgePrMerge, forgePrRead } from "../src/actions.ts";
-import { durationMs, land, untilHeadMoved, untilPipeline } from "../src/flow.ts";
+import { durationMs, land, untilHeadMoved, untilPipeline, untilPrEnded } from "../src/flow.ts";
 import { sha } from "./fake-gitlab.ts";
 
 const repo = { host: "gitlab.example.com", path: "acme/billing" };
@@ -219,4 +219,21 @@ test("a script waits for the head of a pull request to move, and is told where t
     { from: 40, timeout: 1000, label: "head-3" },
   ]);
   expect(seen.waits[0]?.filter).toEqual({ "pr.repo.host": repo.host, "pr.repo.path": repo.path, "pr.number": 7 });
+});
+
+test("a script waits for a pull request to be merged or closed, by the two queries, and is told how it ended", async () => {
+  const pr = { repo: { ...repo, projectId: 42 }, number: 7 };
+  const seen = scriptWith({ calls: {}, waits: { "forge.pr.closed": [{ data: { by: "marge" }, at: 12 }] } });
+  expect(await untilPrEnded("end", { pr, from: 5, timeout: "1h" })).toEqual({ ended: "closed", by: "marge", at: 12 });
+  const prFilter = { "pr.repo.host": repo.host, "pr.repo.path": repo.path, "pr.number": 7 };
+  expect(seen.waits).toEqual([
+    { type: "forge.pr.merged", filter: prFilter, opts: { from: 5, timeout: "1h", label: "end-merged" } },
+    { type: "forge.pr.closed", filter: prFilter, opts: { from: 5, timeout: "1h", label: "end-closed" } },
+  ]);
+
+  scriptWith({ calls: {}, waits: { "forge.pr.merged": [{ data: { head, mergeSha: sha("m") }, at: 9 }] } });
+  expect(await untilPrEnded("end", { pr })).toEqual({ ended: "merged", head, mergeSha: sha("m"), at: 9 });
+
+  scriptWith({ calls: {}, waits: { "forge.pr.merged": [{ timedOut: true }] } });
+  expect(await untilPrEnded("end", { pr, timeout: "1m" })).toEqual({ ended: false });
 });

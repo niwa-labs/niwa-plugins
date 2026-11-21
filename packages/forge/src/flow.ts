@@ -1,6 +1,6 @@
 /**
  * The script helpers of the forge module: wait for the pipeline of a commit, land a pull request, wait
- * for the head of a pull request to move. They wait for the queries of `./queries.ts`.
+ * for a pull request to end or for its head to move. They wait for the queries of `./queries.ts`.
  *
  * They run inside a workflow script and use its globals (`call`, `wait`, `now`, `race`), read when a
  * helper is called, so this file imports nothing of the script runtime. Every call a helper makes is
@@ -14,7 +14,7 @@ import type { z } from "zod";
 import { forgePipelineRead, forgePrMerge, forgePrRead } from "./actions.ts";
 import type { MergeOutcome, PullRequest } from "./actions.ts";
 import { verdictOf as stateVerdict } from "./normalize.ts";
-import type { Pipeline, PipelineKind, PrMerged } from "./record-types.ts";
+import type { Pipeline, PipelineKind, PrClosed, PrMerged } from "./record-types.ts";
 import { mergeDisarmed, pipelineOf, prClosed, prHead, prMerged } from "./queries.ts";
 import type { RepoName } from "./targets.ts";
 
@@ -193,4 +193,40 @@ export async function untilHeadMoved(key: string, opts: { pr: PrRefGiven; from?:
   if ("timedOut" in waited) return { moved: false };
   const { head, previous } = waited.data;
   return { moved: true, head, ...(previous === undefined ? {} : { previous }), at: waited.at };
+}
+
+/** How a pull request ended while a script waited for it: merged or closed, and where, or not by the timeout. */
+export type PrEnd =
+  | { ended: "merged"; head?: string; mergeSha?: string; by?: string; at: number }
+  | { ended: "closed"; by?: string; at: number }
+  | { ended: false };
+
+/**
+ * Wait until a pull request is merged or closed after `from`, a position an earlier wait or read
+ * answered, or after the wait began: whichever the module records first answers at once, and the other
+ * wait is cancelled. `ended: false` at the timeout; without one it waits for ever. It waits for the
+ * module's records, so the repository must be watched; `at` is the position of the record.
+ */
+export async function untilPrEnded(key: string, opts: { pr: PrRefGiven; from?: number; timeout?: Duration }): Promise<PrEnd> {
+  const api = script();
+  const pr = { repo: nameOf(opts.pr.repo), number: opts.pr.number };
+  const how = { ...(opts.from === undefined ? {} : { from: opts.from }), ...(opts.timeout === undefined ? {} : { timeout: opts.timeout }) };
+  const ended = await api.race<"merged" | "closed", Waited>(key, {
+    merged: () => api.wait(prMerged(pr), { ...how, label: `${key}-merged` }),
+    closed: () => api.wait(prClosed(pr), { ...how, label: `${key}-closed` }),
+  });
+  const waited = ended.value;
+  if ("timedOut" in waited) return { ended: false };
+  if (ended.key === "closed") {
+    const { by } = waited.data as z.output<typeof PrClosed.schema>;
+    return { ended: "closed", ...(by === undefined ? {} : { by }), at: waited.at };
+  }
+  const { head, mergeSha, by } = waited.data as z.output<typeof PrMerged.schema>;
+  return {
+    ended: "merged",
+    ...(head === undefined ? {} : { head }),
+    ...(mergeSha === undefined ? {} : { mergeSha }),
+    ...(by === undefined ? {} : { by }),
+    at: waited.at,
+  };
 }
