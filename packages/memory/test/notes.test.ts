@@ -109,3 +109,16 @@ test("an erased note leaves no trace in what the memory shows, and the same word
   expect(again.corroborated).toBe(false);
   expect(again.note).not.toBe(note);
 });
+
+test("the notes a memory listed at a position are those that held then, and an erased one is in none", async () => {
+  const host = await memoryHost();
+  const first = await host.as<Noted>(rin, "memory.note", { text: "Releases go out on Fridays." });
+  const at = Number((await host.records()).at(-1)!.seq);
+  const second = await host.as<Noted>(rin, "memory.note", { text: "Releases are announced in the channel." });
+  const listed = async (input: Record<string, unknown>) => (await host.as<{ notes: View[] }>(rin, "memory.list", input)).notes.map((one) => one.note);
+  expect(await listed({})).toEqual([second.note, first.note]);
+  expect(await listed({ at })).toEqual([first.note]);
+  expect(await listed({ at: 0 })).toEqual([]);
+  await host.as(owner, "memory.erase", { memory: "rin", note: first.note });
+  expect(await listed({ at })).toEqual([]);
+});

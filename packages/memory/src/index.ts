@@ -349,7 +349,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
         world: "niwa",
         run: (input, ctx) => {
           const { memory } = reach(ctx, input.memory);
-          const notes = now()
+          const notes = asOf(input.at)
             .notesOf(memory)
             .filter(holds)
             .filter((note) => input.about === undefined || note.about === input.about)

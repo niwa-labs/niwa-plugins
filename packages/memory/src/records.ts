@@ -321,8 +321,9 @@ export const memoryGet = actionRef("memory.get", {
 });
 
 export const memoryList = actionRef("memory.list", {
-  description: "Lists the notes of a memory that hold now, newest first; with `project`, those of that project and the general ones.",
-  input: z.object({ ...Named, project: Project.optional(), about: NoteAbout.optional(), limit: z.number().int().positive().max(500).default(50) }),
+  description:
+    "Lists the notes of a memory that hold now, or held at a position of the journal (`at`), newest first; with `project`, those of that project and the general ones.",
+  input: z.object({ ...Named, project: Project.optional(), about: NoteAbout.optional(), limit: z.number().int().positive().max(500).default(50), at: At.optional() }),
   output: z.object({ memory: MemoryName, notes: z.array(NoteView) }),
 });
 
