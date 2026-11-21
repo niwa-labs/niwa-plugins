@@ -140,7 +140,7 @@ export class FakeGitLab {
       if (one !== undefined) return json(one.status, one.body, { ...this.headers, ...one.headers });
     }
     if (init.headers["PRIVATE-TOKEN"] !== this.token) return json(401, { message: "401 Unauthorized" });
-    const answer = this.#route(init.method, path, query, body);
+    const answer = this.#paged(init.method, query, this.#route(init.method, path, query, body));
     if (init.method === "GET" && answer.status === 200) {
       const etag = `W/"${createHash("sha1").update(JSON.stringify(answer.body)).digest("hex")}"`;
       if (init.headers["If-None-Match"] === etag) return new Response(null, { status: 304, headers: { ETag: etag, ...this.headers } });
@@ -258,6 +258,16 @@ export class FakeGitLab {
 
   #jobJson(job: FakeJob): unknown {
     return { id: job.id, name: job.name, stage: job.stage, status: job.status, ref: job.ref, pipeline: { id: job.pipeline } };
+  }
+
+  /** A list with `per_page` is cut to the page asked for, and says which page comes next, as the server does. */
+  #paged(method: string, query: Record<string, string>, answer: { status: number; body: unknown; headers?: Record<string, string> }): { status: number; body: unknown; headers?: Record<string, string> } {
+    if (method !== "GET" || answer.status !== 200 || !Array.isArray(answer.body) || query["per_page"] === undefined) return answer;
+    const size = Number(query["per_page"]);
+    const page = Number(query["page"] ?? "1");
+    const items = answer.body.slice((page - 1) * size, page * size);
+    const more = answer.body.length > page * size;
+    return { status: 200, body: items, headers: { ...answer.headers, ...(more ? { "X-Next-Page": String(page + 1) } : {}) } };
   }
 
   #route(method: string, path: string, query: Record<string, string>, body: any): { status: number; body: unknown; headers?: Record<string, string> } {
@@ -417,6 +427,9 @@ export class FakeGitLab {
     if (method === "GET" && rest === "/events") {
       const items = [...project.events].sort((a, b) => (query["sort"] === "asc" ? a.id - b.id : b.id - a.id));
       return { status: 200, body: items };
+    }
+    if (method === "GET" && (hit = m(/^\/repository\/commits\/([0-9a-f]+)\/merge_requests$/))) {
+      return { status: 200, body: [...project.mrs.values()].filter((mr) => mr.sha === hit?.[1]).map((mr) => this.#mrJson(project, mr)) };
     }
     if (method === "GET" && (hit = m(/^\/repository\/commits\/([0-9a-f]+)$/))) {
       const parents = project.commits.get(hit[1] as string);

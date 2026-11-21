@@ -3,7 +3,7 @@
 
 import { afterEach, expect, test } from "bun:test";
 
-import { forgeCommentCreate, forgeCommentRead, forgeJobLog, forgeJobRun, forgePipelineRetry, forgePipelineTrigger, forgePrClose, forgePrEnsure, forgePrMerge, forgePrRead, forgeRepoList, forgeRepoWatch, secret } from "../src/index.ts";
+import { forgeCommentCreate, forgeCommentRead, forgeJobLog, forgeJobRun, forgePipelineRead, forgePipelineRetry, forgePipelineTrigger, forgePrClose, forgePrEnsure, forgePrMerge, forgePrRead, forgeRepoList, forgeRepoWatch, secret } from "../src/index.ts";
 import { sha } from "./fake-gitlab.ts";
 import { BILLING, forgeHost, openMr } from "./support.ts";
 import type { ForgeHost } from "./support.ts";
@@ -179,6 +179,17 @@ test("a secret value the server repeats in an error is not in the error, nor in 
   expect(String((error as Error).message)).toContain("is not allowed");
   expect(String((error as Error).message)).not.toContain("s3cr3t-deploy-value");
   expect(JSON.stringify(await host.records())).not.toContain("s3cr3t-deploy-value");
+});
+
+test("the pipelines of a commit include a merge result however many pipelines the project ran since", async () => {
+  const host = await served();
+  openMr(host);
+  const mergeSha = sha("merge-result-1");
+  host.billing.commits.set(mergeSha, [sha("main-1"), sha("topic-1")]);
+  const result = host.server.pipeline(host.billing, { sha: mergeSha, ref: "refs/merge-requests/7/merge", source: "merge_request_event", status: "success" });
+  for (let at = 0; at < 60; at += 1) host.server.pipeline(host.billing, { sha: sha(`other-${String(at)}`), ref: "main" });
+  const found = await host.niwa.call(forgePipelineRead, { repo: BILLING, sha: sha("topic-1"), kind: "merge-result" });
+  expect(found.items.map((one) => [one.pipeline, one.sourceSha, one.mergeSha])).toEqual([[result.id, sha("topic-1"), mergeSha]]);
 });
 
 test("a job log counts the bytes the server sent, and a tail that starts inside a character starts after it", async () => {

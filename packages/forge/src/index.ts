@@ -58,7 +58,7 @@ import {
 import { ForgeError } from "./gitlab.ts";
 import type { FetchLike, GitLab } from "./gitlab.ts";
 import { cancelMerge, checkMerge, merge, pendingMerges } from "./merge.ts";
-import { checksOf, kindOf, lookupsOf, pipelineOf, pullRequestOf, runStateOf } from "./normalize.ts";
+import { checksOf, lookupsOf, pipelineOf, pullRequestOf, runStateOf } from "./normalize.ts";
 import { DEFAULT_INTERVALS, Poller, sync } from "./observe.ts";
 import type { PollIntervals } from "./observe.ts";
 import { observedPrs } from "./prs.ts";
@@ -303,19 +303,23 @@ export function forge(options: ForgeOptions): Plugin {
             input.pipeline !== undefined
               ? [await client.get<GitLabPipeline>(projectPath(repo, `/pipelines/${String(input.pipeline)}`))]
               : await client.list<GitLabPipeline>(projectPath(repo, "/pipelines"), input.sha === undefined ? {} : { sha: input.sha });
-          let items = await pipelinesOf(repo, raw);
-          // A merge result runs on the merge commit, so the pipelines of a change are found by its own commit too.
+          const items = await pipelinesOf(repo, raw);
+          // A merge result runs on the merge commit of its own, so the pipelines of a change are found
+          // through the pull requests whose head is the commit, each of which lists its own pipelines.
           if (input.sha !== undefined && input.pipeline === undefined) {
-            const merges = await client.get<GitLabPipeline[]>(projectPath(repo, "/pipelines"), { per_page: 50, order_by: "id", sort: "desc" });
-            const extra = await pipelinesOf(
-              repo,
-              merges.filter((one) => kindOf(one).kind === "merge-result" || kindOf(one).kind === "train"),
-            );
             const seen = new Set(items.map((one) => one.pipeline));
-            items = [...items, ...extra.filter((one) => one.sourceSha === input.sha && !seen.has(one.pipeline))];
+            const requests = await client.list<GitLabMr>(projectPath(repo, `/repository/commits/${input.sha}/merge_requests`));
+            for (const mr of requests) {
+              const ofRequest = await pipelinesOf(repo, await client.list<GitLabPipeline>(projectPath(repo, `/merge_requests/${String(mr.iid)}/pipelines`)));
+              for (const one of ofRequest) {
+                if (one.sourceSha !== input.sha || seen.has(one.pipeline)) continue;
+                seen.add(one.pipeline);
+                items.push(one);
+              }
+            }
           }
-          if (input.kind !== undefined) items = items.filter((one) => one.kind === input.kind);
-          return { items: items.sort((a, b) => b.pipeline - a.pipeline) };
+          const wanted = input.kind === undefined ? items : items.filter((one) => one.kind === input.kind);
+          return { items: wanted.sort((a, b) => b.pipeline - a.pipeline) };
         },
       }),
     );
