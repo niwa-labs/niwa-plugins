@@ -125,6 +125,11 @@ export class Seen {
     this.#repo = repo;
   }
 
+  /** The repository this projection is of. */
+  get repo(): Repo {
+    return this.#repo;
+  }
+
   /** Take the records the journal gained since the last absorbed one. */
   absorb(journal: JournalReader): void {
     const repo = this.#repo;

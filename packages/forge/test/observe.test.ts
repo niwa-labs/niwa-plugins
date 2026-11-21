@@ -25,6 +25,7 @@ import {
   forgePrMergePending,
   forgeRepoStatus,
   forgeRepoSync,
+  forgeRepoUnwatch,
   forgeRepoWatch,
   pollInterval,
 } from "../src/index.ts";
@@ -327,6 +328,20 @@ test("a repository says when it was last polled and what its last poll failed wi
   expect(ok?.lastOkAt).toBeGreaterThan(0);
   expect(ok).not.toHaveProperty("lastError");
   expect((await host.niwa.call(forgeRepoStatus, {})).items).toHaveLength(1);
+});
+
+test("a path that names another project than when it was watched before is read afresh", async () => {
+  const host = await watched();
+  openMr(host);
+  await syncNow(host);
+  await host.niwa.call(forgeRepoUnwatch, { repo: BILLING });
+  host.server.projects.delete(42);
+  const renamed = host.server.project(99, "acme/billing");
+  openMr(host, 3, "topic-3", renamed);
+  await host.niwa.call(forgeRepoWatch, { repo: BILLING });
+  expect((await syncNow(host)).written).toBeGreaterThan(0);
+  expect(await syncNow(host)).toEqual({ written: 0 });
+  expect((await dataOf(host, PrOpened.name)).map((one) => (one["pr"] as { repo: { projectId: number } }).repo.projectId)).toEqual([42, 99]);
 });
 
 test("a repository that is not watched is not polled", async () => {

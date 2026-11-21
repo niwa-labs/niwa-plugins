@@ -441,7 +441,7 @@ export class FakeGitLab {
 }
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
-  if (body instanceof Uint8Array) return new Response(body, { status, headers: { "Content-Type": "text/plain", ...headers } });
+  if (body instanceof Uint8Array) return new Response(new Uint8Array(body), { status, headers: { "Content-Type": "text/plain", ...headers } });
   if (typeof body === "string") return new Response(body, { status, headers: { "Content-Type": "text/plain", ...headers } });
   return new Response(body === null ? null : JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
 }

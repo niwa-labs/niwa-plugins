@@ -170,7 +170,9 @@ export function forge(options: ForgeOptions): Plugin {
         .then(() => {
           const now = journal();
           if (now === undefined) throw new ForgeError("not-watched", "the host is not serving");
-          const seen = projections.get(key) ?? new Seen(watched.repo);
+          // A path that names another project than before (a rename, a new project under the old path) starts afresh.
+          const known = projections.get(key);
+          const seen = known?.repo.projectId === watched.repo.projectId ? known : new Seen(watched.repo);
           projections.set(key, seen);
           return sync(
             { gitlab: gitlab(watched.repo.host), journal: now, emit: (type, data, opts) => api.emit(type, data, opts), seen, gap: () => (missed = true) },
