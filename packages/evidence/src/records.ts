@@ -15,8 +15,11 @@
 import { Address, actionRef, record } from "@niwa-labs/core";
 import { z } from "zod";
 
-/** A full commit id. */
-export const Sha = z.string().regex(/^[0-9a-f]{40,64}$/, "a full commit id");
+/** A full commit id: a SHA-1 (40 hex characters) or a SHA-256 (64) object id. */
+export const Sha = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/, "a full commit id");
+
+/** The name of a check (`gates`, `live`), the same for a verdict and for a requirement of one. */
+export const VerdictName = z.string().min(1).max(100);
 
 /** What an attestation is about: `gitlab.example.com/acme/billing/pr/7`, `plan/rev-3/node-2`. */
 export const Subject = z.string().min(1).max(512);
@@ -43,7 +46,7 @@ export const HeadClaim = z.strictObject({
 /** A verdict of a named check (`gates`, `live`) on a commit. */
 export const VerdictClaim = z.strictObject({
   kind: z.literal("verdict"),
-  name: z.string().min(1).max(100),
+  name: VerdictName,
   outcome: z.enum(["pass", "fail"]),
   sha: Sha,
 });
@@ -61,12 +64,23 @@ export type AttestedData = z.infer<typeof Attested.schema>;
 
 /** A requirement an attestation may cover. */
 export const Requirement = z.union([
-  /** A green merge result of exactly this pair of commits. */
-  z.strictObject({ kind: z.literal("ci"), at: z.literal("merge-result"), subject: Subject, sourceSha: Sha, targetSha: Sha }),
+  /**
+   * A green merge result of exactly this pair of commits. `pipeline` is the pipeline the forge selected
+   * for the merge request now: when it is given, only an attestation of that pipeline counts, so an
+   * earlier merge result does not cover a merge request whose selected pipeline is an ordinary one.
+   */
+  z.strictObject({
+    kind: z.literal("ci"),
+    at: z.literal("merge-result"),
+    subject: Subject,
+    sourceSha: Sha,
+    targetSha: Sha,
+    pipeline: z.number().int().positive().optional(),
+  }),
   /** A green pipeline of this head. */
   z.strictObject({ kind: z.literal("ci"), at: z.literal("head"), subject: Subject, sha: Sha }),
   /** A passing verdict of this name on this commit, from none of `notBy`. */
-  z.strictObject({ kind: z.literal("verdict"), subject: Subject, name: z.string().min(1), sha: Sha, notBy: z.array(Address).optional() }),
+  z.strictObject({ kind: z.literal("verdict"), subject: Subject, name: VerdictName, sha: Sha, notBy: z.array(Address).optional() }),
 ]);
 export type Requirement = z.infer<typeof Requirement>;
 
@@ -79,7 +93,7 @@ export const Uncovered = z.enum(["none", "target-moved", "not-merge-result", "fa
 export type Uncovered = z.infer<typeof Uncovered>;
 
 /** One attestation, as the module lists it. */
-export const Attestation = z.strictObject({ id: z.string(), subject: Subject, claim: Claim, author: Address, at: z.number() });
+export const Attestation = z.strictObject({ id: z.string(), seq: z.number().int().nonnegative(), subject: Subject, claim: Claim, author: Address, at: z.number() });
 export type Attestation = z.infer<typeof Attestation>;
 
 export const evidenceAttest = actionRef("evidence.attest", {
@@ -95,15 +109,18 @@ export const evidenceCovers = actionRef("evidence.covers", {
   description:
     "Whether a requirement is covered by an attestation of the same state, and by which. A merge result covers only the pair " +
     "of commits it ran on: when the target branch moved, or GitLab ran an ordinary pipeline of the head instead of a merge " +
-    "result, it is not covered and `why` says so.",
+    "result, it is not covered and `why` says so. Give the `pipeline` the forge selected for the merge request to hold the " +
+    "requirement to that pipeline alone. A read that cannot reach the journal is refused, not answered as `none`.",
   input: z.strictObject({ requirement: Requirement }),
   output: z.strictObject({ covered: z.boolean(), by: z.array(z.string()), why: Uncovered.optional() }),
 });
 
 export const evidenceList = actionRef("evidence.list", {
-  description: "The attestations of a subject, or every attestation, oldest first.",
-  input: z.strictObject({ subject: Subject.optional() }),
-  output: z.strictObject({ items: z.array(Attestation) }),
+  description:
+    "The attestations of a subject, or every attestation, in the order they were written, a page at a time: `limit` of them " +
+    "(default 100) after the position `after`. `next` is the `after` of the following page, and is absent on the last one.",
+  input: z.strictObject({ subject: Subject.optional(), after: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(500).optional() }),
+  output: z.strictObject({ items: z.array(Attestation), next: z.number().int().nonnegative().optional() }),
 });
 
 /** Every record type of the evidence module. */

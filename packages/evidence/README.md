@@ -10,3 +10,9 @@ pipeline for a specific pair of commits.
   `excluded-author`. A merge result covers only the pair of commits it ran on.
 - `/records`: the record type, the claims, the requirements and the action
   references.
+
+An attestation counts only if the host's record of who wrote it agrees with its
+author: a client that writes `evidence.attested` straight to the journal cannot
+attest as somebody else. The default author is the principal of the caller's
+token, so a session relaunched under a new token is another author; a composition
+that excludes authors by session or agent passes `bind` to give that address.
