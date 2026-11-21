@@ -1,9 +1,10 @@
 /** What the memory page makes of notes and of the questions that wait: the top layer by part, sources, and share questions. */
 
+import { SHARE_QUESTION, shareReferenceOf } from "../share-question.ts";
+import type { ShareReference } from "../share-question.ts";
 import type { Note, NoteSource, Open, OpenRequest } from "./actions.ts";
 
-/** The name of the question a memory asks the owner before a note about him leaves. */
-export const SHARE_QUESTION = "memory.share";
+export { SHARE_QUESTION };
 
 /** A part of the top layer: what it is called and the notes in it. */
 export type TopPart = { heading: string; notes: Note[] };
@@ -53,8 +54,8 @@ export function memoryChoice(asked: string | undefined, names: readonly string[]
   return asked !== undefined && names.includes(asked) ? asked : names[0];
 }
 
-/** A question waiting for the owner about what a memory may tell. */
-export type ShareQuestion = { id: string; title: string; detail: string | undefined };
+/** A question waiting for the owner about what a memory may tell: the note it is about, when its detail names one. */
+export type ShareQuestion = { id: string; title: string; detail: string | undefined; reference: ShareReference | undefined; purpose: string | undefined };
 
 function isOpenRequest(open: Open): open is OpenRequest {
   return "question" in open;
@@ -65,5 +66,13 @@ export function shareQuestions(open: readonly Open[], memory: string): ShareQues
   return open
     .filter(isOpenRequest)
     .filter((one) => one.question === SHARE_QUESTION && one.from?.kind === "agent" && one.from.id === memory)
-    .map((one) => ({ id: one.id, title: one.input.title, detail: one.input.detail }));
+    .map((one) => {
+      const named = shareReferenceOf(one.input.detail);
+      return { id: one.id, title: one.input.title, detail: one.input.detail, reference: named?.reference, purpose: named?.purpose };
+    });
+}
+
+/** What a question's note shows now: the owner is shown its text only while the note still holds as the question named it. */
+export function shownText(reference: ShareReference, note: Pick<Note, "text" | "revision"> & { status: string }): string | undefined {
+  return note.status === "live" && note.revision === reference.revision ? note.text : undefined;
 }

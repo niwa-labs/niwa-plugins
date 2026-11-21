@@ -14,19 +14,19 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { action, agent as agentAddress, addressText, confirmOptions, isYes, owner, recordId, recordTypeName, seq, stableJson } from "@niwa-labs/core";
-import type { ActionContext, Address, Caller, JournalReader } from "@niwa-labs/core";
+import type { ActionContext, Address, Caller, JournalReader, Step } from "@niwa-labs/core";
 import { COCKPIT_MODULE, plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
 import { AGENT_BRIEFING, AgentAttached, AgentTurnQueued, SessionDigestTaken, agentGet } from "@niwa-labs/agent/records";
 import type { TurnAuthor } from "@niwa-labs/agent/records";
 
-import { QuestionName, RequestAnswered, requestAsk } from "@niwa-labs/requests/records";
+import { QuestionName, RequestAnswered, requestAsk, requestCancel, requestFind, requestGet } from "@niwa-labs/requests/records";
 
 import { consolidate } from "./consolidate.ts";
 import type { ConsolidationLimits } from "./consolidate.ts";
 import { conclusion, standing } from "./context.ts";
 import type { Reader } from "./context.ts";
-import { Memories, sourceKey } from "./fold.ts";
+import { Memories, dataAs, sourceKey } from "./fold.ts";
 import type { TakenDigest } from "./fold.ts";
 import {
   MEMORY_TYPES,
@@ -66,6 +66,7 @@ import {
 import type { ContextItem, MemoryName, NoteId, NoteView, PageView, SearchHit, Withheld } from "./records.ts";
 import { holds, holdsFor } from "./holds.ts";
 import { rank } from "./search.ts";
+import { SHARE_QUESTION, shareDetail } from "./share-question.ts";
 import { same } from "./same.ts";
 import { topLayer } from "./top.ts";
 
@@ -191,7 +192,7 @@ export function searchable(
 }
 
 /** The name of the question that asks the owner whether a note about him may leave a memory. */
-const SHARE_QUESTION = QuestionName.parse("memory.share");
+const SHARE_QUESTION_NAME = QuestionName.parse(SHARE_QUESTION);
 
 /** The memory module. */
 export function memory(options: MemoryOptions = {}): Plugin {
@@ -666,12 +667,14 @@ export function memory(options: MemoryOptions = {}): Plugin {
       if (note === undefined || note.status !== "live" || note.revision !== wanted.revision) return;
       const asked = await step.outcome(requestAsk, {
         to: owner,
-        question: SHARE_QUESTION,
+        question: SHARE_QUESTION_NAME,
         from: agentAddress(wanted.memory),
         input: {
           kind: "confirm",
           title: `May ${addressText(wanted.for)} be told what ${addressText(agentAddress(wanted.memory))} remembers about you?`,
-          detail: `"${note.text}"\nWanted to: ${wanted.purpose}`,
+          // The note itself is not in the question: whoever reads the open requests would read it. The owner's page
+          // reads the note by its reference, and shows it only while it holds as it was when he was asked.
+          detail: shareDetail({ memory: wanted.memory, note: wanted.note, revision: wanted.revision }, wanted.purpose),
           options: confirmOptions(),
         },
       });
@@ -688,6 +691,26 @@ export function memory(options: MemoryOptions = {}): Plugin {
         { key: "answered" },
       );
     });
+
+    // A question about a note that no longer holds as it was asked is closed: the owner is not left to answer for
+    // a text he can no longer be shown, nor for one that was erased.
+    const closeStale = (id: string) => async (changed: { memory: MemoryName; note: NoteId }, step: Step) => {
+      const note = now().note(changed.memory, changed.note);
+      for (const stored of journal().since(seq(0), [recordTypeName(ShareWanted.name)])) {
+        const wanted = dataAs(stored, ShareWanted);
+        if (wanted === undefined || wanted.memory !== changed.memory || wanted.note !== changed.note) continue;
+        if (note !== undefined && note.status === "live" && note.revision === wanted.revision) continue;
+        const key = `${id}-${String(stored.seq)}`;
+        const found = await step.outcome(requestFind, { cause: String(stored.id), question: SHARE_QUESTION_NAME }, { key: `find:${key}` });
+        if (found.status !== "completed" || found.value.id === undefined) continue;
+        const asked = await step.outcome(requestGet, { id: found.value.id }, { key: `get:${key}` });
+        if (asked.status !== "completed" || asked.value.status !== "open") continue;
+        await step.outcome(requestCancel, { id: found.value.id, by: agentAddress(changed.memory), reason: "the note changed since it was asked" }, { key: `cancel:${key}` });
+      }
+    };
+    api.on(NoteErased, { id: "share-close-erased" }, closeStale("erased"));
+    api.on(NoteCorrected, { id: "share-close-corrected" }, closeStale("corrected"));
+    api.on(NoteRetracted, { id: "share-close-retracted" }, closeStale("retracted"));
 
     api.summarize(() => {
       const memories = api.journal?.() === undefined ? undefined : now();

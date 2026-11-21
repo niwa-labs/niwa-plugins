@@ -89,7 +89,9 @@ test("a note about the owner leaves only once he said yes, and is asked again wh
   expect(request.to).toEqual(owner);
   expect(request.from).toEqual(rin);
   expect(request.input.title).toBe("May agent bob be told what agent rin remembers about you?");
-  expect(request.input.detail).toContain("He is on leave in May.");
+  // The question names the note and says why; the text of a note about the owner is not in it.
+  expect(request.input.detail).not.toContain("He is on leave in May.");
+  expect(request.input.detail).toContain(note);
   expect(request.input.detail).toContain("to plan the week");
   // Asked again before he answers, he is not asked twice.
   expect((await ask(host, bob, { query: "leave" })).withheld).toEqual([{ note, reason: "about-the-owner", status: "asked" }]);
@@ -217,4 +219,20 @@ test("the owner may allow a note for every purpose, or for one, in his own words
   await host.as(owner, "memory.share", { memory: "rin", note, for: bob, allowed: true });
   expect((await ask(host, bob, { query: "leave", purpose: "to write him a letter" })).items).toHaveLength(1);
   expect((await ask(host, lead, { query: "leave", purpose: "to plan the week" })).items).toEqual([]);
+});
+
+test("a question about a note that was corrected, retracted or erased is closed", async () => {
+  const host = await served();
+  const text = (n: number) => `He is on leave in month ${String(n)}.`;
+  const notes = [await noted(host, { text: text(1), about: "owner" }), await noted(host, { text: text(2), about: "owner" }), await noted(host, { text: text(3), about: "owner" })];
+  await ask(host, bob, { query: "leave month" });
+  const created = (await until(host, "request.created", 3)).filter((one) => one.type === "request.created");
+  expect(created).toHaveLength(3);
+  await host.as(rin, "memory.correct", { note: notes[0], text: "He is on leave in the autumn." });
+  await host.as(rin, "memory.retract", { note: notes[1] });
+  await host.as(owner, "memory.erase", { memory: "rin", note: notes[2] });
+  const ended = (await until(host, "request.cancelled", 3)).filter((one) => one.type === "request.cancelled");
+  expect(ended.map((one) => (one.data as { id: string }).id).sort()).toEqual(created.map((one) => (one.data as { id: string }).id).sort());
+  const { requests } = await host.as<{ requests: unknown[] }>(owner, "request.open", {});
+  expect(requests).toEqual([]);
 });

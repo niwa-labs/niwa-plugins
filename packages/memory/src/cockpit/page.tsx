@@ -3,8 +3,8 @@
 import { EntityLink, PageLink, pathFor, useCall, type PageProps } from "@niwa-labs/cockpit-sdk";
 import { Badge, Markdown } from "@niwa-labs/ui-kit";
 
-import { MAX_NOTES, agentListAction, noteListAction, openAction, pageGetAction, pageListAction, type Note, type PageSummary } from "./actions.ts";
-import { memoryChoice, newestFirst, shareQuestions, sourceText, standingText, topParts } from "./notes.ts";
+import { MAX_NOTES, agentListAction, noteGetAction, noteListAction, openAction, pageGetAction, pageListAction, type Note, type PageSummary } from "./actions.ts";
+import { memoryChoice, newestFirst, shareQuestions, shownText, sourceText, standingText, topParts, type ShareQuestion } from "./notes.ts";
 
 const NOTES = { refreshOn: { types: ["memory.note.*", "memory.consolidated"] } };
 const PAGES = { refreshOn: { types: ["memory.page.written"] } };
@@ -89,6 +89,19 @@ function Pages({ memory, open }: { memory: string; open: string | undefined }) {
   );
 }
 
+/** The note a question is about, read when it is shown: its text only while it holds as the question named it. */
+function QuestionNote({ reference }: { reference: NonNullable<ShareQuestion["reference"]> }) {
+  const got = useCall(noteGetAction, { memory: reference.memory, note: reference.note }, NOTES);
+  if (got.isPending) return <span className="text-xs text-muted-foreground">Reading the note…</span>;
+  if (got.isError) return <span className="text-xs text-muted-foreground">The note can no longer be read.</span>;
+  const text = shownText(reference, got.data);
+  return text === undefined ? (
+    <span className="text-xs text-muted-foreground">The note changed since this was asked.</span>
+  ) : (
+    <span className="whitespace-pre-wrap text-sm">{text}</span>
+  );
+}
+
 function ShareQuestions({ memory }: { memory: string }) {
   const open = useCall(openAction, {}, SHARES);
   if (open.isPending) return <p className="text-sm text-muted-foreground">Loading the questions…</p>;
@@ -103,7 +116,8 @@ function ShareQuestions({ memory }: { memory: string }) {
             <span className="min-w-0 truncate text-sm font-medium">{question.title}</span>
             <EntityLink entity={{ kind: "request", id: question.id }} short />
           </div>
-          {question.detail === undefined ? null : <span className="whitespace-pre-wrap text-xs text-muted-foreground">{question.detail}</span>}
+          {question.reference === undefined ? null : <QuestionNote reference={question.reference} />}
+          {question.purpose === undefined ? null : <span className="whitespace-pre-wrap text-xs text-muted-foreground">Wanted to: {question.purpose}</span>}
         </li>
       ))}
     </ul>

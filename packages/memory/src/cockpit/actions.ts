@@ -52,6 +52,13 @@ export const noteListAction = {
   output: z.object({ memory: z.string(), notes: z.array(Note) }),
 } as const;
 
+/** One note, as the page reads it to show the text of a question's note: only while it holds as the question named it. */
+export const noteGetAction = {
+  name: "memory.get",
+  input: z.object({ memory: z.string(), note: z.string() }),
+  output: z.object({ note: z.string(), text: z.string(), status: z.string(), revision: z.number() }),
+} as const;
+
 export const PageSummary = z.object({ page: z.string(), title: z.string(), project: z.string().optional(), revision: z.number() });
 export type PageSummary = z.infer<typeof PageSummary>;
 

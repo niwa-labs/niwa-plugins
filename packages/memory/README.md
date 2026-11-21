@@ -66,7 +66,12 @@ conclusion, whom it is about and where it holds:
   nothing leave, and `memory.share` gives his word without a question, for
   the purpose he names or, naming none, for every purpose. A request read at a
   position (`at`) asks nobody, and says `not-asked` for a note he was never
-  asked of, `asked` only when his question stood at that position;
+  asked of, `asked` only when his question stood at that position.
+  The question names the note and its revision and the purpose, never the
+  note's text, which anyone reading the open requests would read. The
+  cockpit page reads the note when it shows the question, and shows the text
+  only while the note holds as it was asked; a question about a note that is
+  corrected, taken back or erased is cancelled;
 - a project note goes to agents whose project contains it, and is not so
   much as named to any other;
 - other work notes go to anyone who asks.

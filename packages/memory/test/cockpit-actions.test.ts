@@ -7,8 +7,8 @@ import { agentList } from "@niwa-labs/agent/records";
 import { requestOpen } from "@niwa-labs/requests/records";
 import { unreadable, unsendable } from "@niwa-labs/testing";
 
-import { memoryList, memoryPageGet, memoryPageList } from "../src/records.ts";
-import { agentListAction, noteListAction, openAction, pageGetAction, pageListAction } from "../src/cockpit/actions.ts";
+import { memoryGet, memoryList, memoryPageGet, memoryPageList } from "../src/records.ts";
+import { agentListAction, noteGetAction, noteListAction, openAction, pageGetAction, pageListAction } from "../src/cockpit/actions.ts";
 import { shareQuestions } from "../src/cockpit/notes.ts";
 import { bob, closeAll, memoryHost, owner, rin, until } from "./fixtures/host.ts";
 
@@ -17,6 +17,7 @@ afterEach(closeAll);
 test.each([
   ["agent.list", agentListAction, agentList],
   ["memory.list", noteListAction, memoryList],
+  ["memory.get", noteGetAction, memoryGet],
   ["memory.page.list", pageListAction, memoryPageList],
   ["memory.page.get", pageGetAction, memoryPageGet],
   ["request.open", openAction, requestOpen],
@@ -43,7 +44,10 @@ test("a note about the owner that another agent wanted is a question waiting for
   const found = shareQuestions(requests, "rin");
   expect(found).toHaveLength(1);
   expect(found[0]?.title).toBe("May agent bob be told what agent rin remembers about you?");
-  expect(found[0]?.detail).toContain("He is on leave in May.");
+  // What waits for him names the note; its text is read when it is shown, not kept in the question.
+  expect(found[0]?.detail).not.toContain("He is on leave in May.");
+  expect(found[0]?.reference).toEqual({ memory: "rin", note: note.note, revision: 1 });
+  expect(found[0]?.purpose).toBe("to plan the week");
   expect(note.note).toMatch(/^note-/);
   expect(shareQuestions(requests, "bob")).toEqual([]);
 });

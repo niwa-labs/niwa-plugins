@@ -3,7 +3,8 @@
 import { expect, test } from "bun:test";
 
 import type { Note, Open } from "../src/cockpit/actions.ts";
-import { memoryChoice, newestFirst, shareQuestions, sourceText, standingText, topParts } from "../src/cockpit/notes.ts";
+import { memoryChoice, newestFirst, shareQuestions, shownText, sourceText, standingText, topParts } from "../src/cockpit/notes.ts";
+import { shareDetail, shareReferenceOf } from "../src/share-question.ts";
 
 let counter = 0;
 function note(text: string, extra: Partial<Note> = {}): Note {
@@ -71,5 +72,18 @@ test("a share question is one the memory asked, and nothing else that waits is",
     ],
     "rin",
   );
-  expect(found).toEqual([{ id: "req-1", title: "May bob be told?", detail: "why" }]);
+  expect(found).toEqual([{ id: "req-1", title: "May bob be told?", detail: "why", reference: undefined, purpose: undefined }]);
+});
+
+test("a share question names its note and revision and the purpose, and the text is shown only while the note holds as named", () => {
+  const reference = { memory: "rin", note: "note-0123456789ab", revision: 2 };
+  const detail = shareDetail(reference, "to plan the week.\nTwo lines");
+  expect(shareReferenceOf(detail)).toEqual({ reference, purpose: "to plan the week.\nTwo lines" });
+  expect(shareReferenceOf("why")).toBeUndefined();
+  const [found] = shareQuestions([{ ...request("req-1", "memory.share", { kind: "agent", id: "rin" }), input: { kind: "confirm", title: "May bob be told?", detail } }], "rin");
+  expect(found).toMatchObject({ reference, purpose: "to plan the week.\nTwo lines" });
+  expect(shownText(reference, { text: "He is on leave.", revision: 2, status: "live" })).toBe("He is on leave.");
+  expect(shownText(reference, { text: "He is on leave.", revision: 3, status: "live" })).toBeUndefined();
+  expect(shownText(reference, { text: "", revision: 2, status: "erased" })).toBeUndefined();
+  expect(shownText(reference, { text: "He is on leave.", revision: 2, status: "retracted" })).toBeUndefined();
 });
