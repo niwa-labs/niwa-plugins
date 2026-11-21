@@ -2,24 +2,9 @@
 
 import { useAction, useCall } from "@niwa-labs/cockpit-sdk";
 import { Badge, Button, StateRing } from "@niwa-labs/ui-kit";
-import type { WorkState } from "@niwa-labs/ui-kit";
 
-import { cancelAction, listAction, type CommitmentItem, type CommitmentStatus } from "./actions.ts";
-
-const RING: Record<CommitmentStatus, WorkState> = {
-  proposed: "waiting",
-  open: "pending",
-  due: "running",
-  kept: "done",
-  missed: "failed",
-  cancelled: "stopped",
-  declined: "skipped",
-};
-
-/** Whether a commitment may still be cancelled: it has not ended. */
-function cancellable(status: CommitmentStatus): boolean {
-  return status === "proposed" || status === "open" || status === "due";
-}
+import { cancelAction, listAction, type CommitmentItem } from "./actions.ts";
+import { RING, cancellable } from "./cards.ts";
 
 function CommitmentCard({ commitment }: { commitment: CommitmentItem }) {
   const cancel = useAction(cancelAction);
