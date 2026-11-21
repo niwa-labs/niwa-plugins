@@ -392,8 +392,9 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
     });
 
     // At the deadline an open commitment is delivered to its agent; after the grace a delivered one
-    // that is not done is missed. Each is decided as of the wake.
-    api.on(TimerSlept, { id: "commitment-wake", requires: [TimerSlept] }, async (wake, step, at) => {
+    // that is not done is missed. Each is decided as of its own wake, so the wakes run side by side,
+    // and an inbox that cannot be reached is a failed outcome that stops no other wake.
+    api.on(TimerSlept, { id: "commitment-wake", requires: [TimerSlept], concurrency: Infinity }, async (wake, step, at) => {
       const matched = SLEEP_KEY.exec(wake.key);
       if (matched === null) return;
       const [, id, which] = matched;
@@ -402,11 +403,11 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
       if (found === undefined || due === undefined) return;
       if (which === "due" && found.status === "open") {
         await step.emit(CommitmentDelivered, { id: found.terms.id, due, at: at.at });
-        await step(agentNotify, { agent: found.terms.to, text: `Commitment ${found.terms.id} is due now: ${found.terms.text}` });
+        await step.outcome(agentNotify, { agent: found.terms.to, text: `Commitment ${found.terms.id} is due now: ${found.terms.text}` });
         await step(timerSleepRequest, { at: due + grace, key: sleepKeyOf(found.terms.id, "grace") });
       } else if (which === "grace" && found.status === "due") {
         await step.emit(CommitmentMissed, { id: found.terms.id, due, at: at.at });
-        await step(agentNotify, { agent: found.terms.to, text: `Commitment ${found.terms.id} was missed: ${found.terms.text}` });
+        await step.outcome(agentNotify, { agent: found.terms.to, text: `Commitment ${found.terms.id} was missed: ${found.terms.text}` });
       }
     });
 

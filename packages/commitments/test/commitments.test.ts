@@ -39,6 +39,7 @@ function agentsStub(told: Told[]) {
         effect: "record",
         world: "niwa",
         run: async (input) => {
+          if (input.agent === "ghost") throw new Error("no agent is called ghost");
           told.push({ agent: input.agent, text: input.text });
           return { turn: `fact-${(told.length + 0xa00000).toString(16)}` };
         },
@@ -229,6 +230,19 @@ test("a record counts as the owner's words only when he wrote it, or a plugin sa
   const wordless = w.rin.call(commitmentMake, { text: "Sell the boat", to: "rin", party: "owner", basis: { kind: "owner-words", record: nodded.record } });
   await expect(wordless).rejects.toThrow(/owner/);
   expect(await w.records("commitment.made")).toHaveLength(1);
+});
+
+test("a delivery that fails holds up no other commitment", async () => {
+  const w = await world();
+  const lost = await w.rin.call(commitmentMake, { text: "Tell the ghost", to: "ghost", due: START + HOUR });
+  const mine = await w.rin.call(commitmentMake, { text: "Check the backups", to: "rin", due: START + 2 * HOUR });
+  await w.clock.advance(2 * HOUR);
+  await eventually(async () => (await w.owner.call(commitmentGet, { id: mine.id })).status === "due");
+  expect(w.told).toEqual([{ agent: "rin", text: expect.stringContaining("Check the backups") }]);
+  await w.clock.advance(GRACE);
+  await eventually(async () => (await w.owner.call(commitmentGet, { id: mine.id })).status === "missed");
+  // The one whose inbox could not be reached still comes to its end.
+  expect((await w.owner.call(commitmentGet, { id: lost.id })).status).toBe("missed");
 });
 
 test("the owner's own promise stands at once", async () => {
