@@ -9,8 +9,11 @@
  */
 
 import type { PullRequest } from "./actions.ts";
+import { ForgeError } from "./gitlab.ts";
+import type { GitLab } from "./gitlab.ts";
 import type { ChecksState, Pipeline, PipelineKind, PrRef, Repo, RunState } from "./record-types.ts";
 import { RunState as RunStates } from "./record-types.ts";
+import { projectPath } from "./servers.ts";
 
 /** A merge request, as much of it as the module reads. */
 export interface GitLabMr {
@@ -100,18 +103,55 @@ export function kindOf(pipeline: GitLabPipeline): { kind: PipelineKind; pr?: num
   return { kind: "branch" };
 }
 
-/** The parents of a commit, as the server says: what a merge result was made of. */
-export type ParentsOf = (sha: string) => Promise<readonly string[] | undefined>;
+/** What a pipeline needs of the server to be told in the module's words. */
+export interface Lookups {
+  /** The parents of a commit: what a merge result was made of. */
+  readonly parentsOf: (sha: string) => Promise<readonly string[] | undefined>;
+  /** Whether the ref of a pipeline is a tag, for a pipeline whose list entry does not say. */
+  readonly isTag: (pipeline: GitLabPipeline) => Promise<boolean>;
+}
+
+/** What is known of a pipeline's ref, by client: whether a pipeline ran for a tag never changes. */
+const TAGS = new WeakMap<GitLab, Map<string, boolean>>();
+
+/** The lookups of one project on one server. */
+export function lookupsOf(gitlab: GitLab, repo: Repo): Lookups {
+  const tags = TAGS.get(gitlab) ?? new Map<string, boolean>();
+  TAGS.set(gitlab, tags);
+  return {
+    async parentsOf(sha) {
+      try {
+        return (await gitlab.get<{ parent_ids: string[] }>(projectPath(repo, `/repository/commits/${sha}`))).parent_ids;
+      } catch (error) {
+        if (error instanceof ForgeError && error.code === "not-found") return undefined;
+        throw error;
+      }
+    },
+    async isTag(pipeline) {
+      const key = `${String(repo.projectId)}:${String(pipeline.id)}`;
+      const known = tags.get(key);
+      if (known !== undefined) return known;
+      // The entry of a list leaves `tag` out; the pipeline read by its id has it.
+      const full = await gitlab.get<GitLabPipeline>(projectPath(repo, `/pipelines/${String(pipeline.id)}`));
+      const tag = full.tag === true;
+      tags.set(key, tag);
+      return tag;
+    },
+  };
+}
 
 /**
  * A pipeline in the module's words. A merge result or a train whose commit the server cannot show
  * as a merge of two parents is not bound to a pair, so it is not answered.
  */
-export async function pipelineOf(repo: Repo, pipeline: GitLabPipeline, parentsOf: ParentsOf): Promise<Pipeline | undefined> {
-  const { kind, pr } = kindOf(pipeline);
+export async function pipelineOf(repo: Repo, pipeline: GitLabPipeline, lookups: Lookups): Promise<Pipeline | undefined> {
+  const found = kindOf(pipeline);
+  const { pr } = found;
+  // A pipeline of a ref the list does not say is a tag or not is asked for: a tag is not a branch.
+  const kind = found.kind === "branch" && pipeline.tag === undefined && (await lookups.isTag(pipeline)) ? "tag" : found.kind;
   const base = { repo, pipeline: pipeline.id, kind, ref: pipeline.ref, state: runStateOf(pipeline.status), ...(pr === undefined ? {} : { pr }) };
   if (kind !== "merge-result" && kind !== "train") return { ...base, sourceSha: pipeline.sha };
-  const parents = await parentsOf(pipeline.sha);
+  const parents = await lookups.parentsOf(pipeline.sha);
   const [targetSha, sourceSha] = parents ?? [];
   if (parents?.length !== 2 || targetSha === undefined || sourceSha === undefined) return undefined;
   return { ...base, sourceSha, targetSha, mergeSha: pipeline.sha };

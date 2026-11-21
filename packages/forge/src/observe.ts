@@ -21,7 +21,7 @@ import type { EmitOptions, JournalReader, RecordType, StoredRecord } from "@niwa
 
 import { ForgeError } from "./gitlab.ts";
 import type { GitLab } from "./gitlab.ts";
-import { checksOf, pipelineOf, pullRequestOf, runStateOf } from "./normalize.ts";
+import { checksOf, lookupsOf, pipelineOf, pullRequestOf, runStateOf } from "./normalize.ts";
 import type { GitLabJob, GitLabMr, GitLabPipeline } from "./normalize.ts";
 import { inTrain, pendingMerges } from "./merge.ts";
 import {
@@ -266,19 +266,12 @@ export async function sync(place: SyncPlace, repo: Repo, since = 0): Promise<num
   }
 
   // Pipelines and their jobs: a state that differs from the last one written is a new version.
-  const parentsOf = async (sha: string) => {
-    try {
-      return (await gitlab.get<{ parent_ids: string[] }>(projectPath(repo, `/repository/commits/${sha}`))).parent_ids;
-    } catch (error) {
-      if (error instanceof ForgeError && error.code === "not-found") return undefined;
-      throw error;
-    }
-  };
+  const lookups = lookupsOf(gitlab, repo);
   const raw = await gitlab.get<GitLabPipeline[]>(projectPath(repo, "/pipelines"), { per_page: 50, order_by: "updated_at", sort: "desc" });
   for (const one of [...raw].sort((a, b) => a.id - b.id)) {
     const last = seen.pipelines.get(one.id);
     if (last?.state === runStateOf(one.status)) continue;
-    const pipeline = await pipelineOf(repo, one, parentsOf);
+    const pipeline = await pipelineOf(repo, one, lookups);
     if (pipeline === undefined) continue;
     const version = (last?.version ?? 0) + 1;
     await write(PipelineObserved, { ...pipeline, ...(last === undefined ? {} : { previous: last.state }), source: { kind: "observed", version } }, idOf(repo, `pipeline:${String(one.id)}:v${String(version)}`));
@@ -298,7 +291,7 @@ export async function sync(place: SyncPlace, repo: Repo, since = 0): Promise<num
   // Checks of the open pull requests, from the pipelines of their heads.
   for (const mr of open) {
     const pipelines = await gitlab.list<GitLabPipeline>(projectPath(repo, `/merge_requests/${String(mr.iid)}/pipelines`));
-    const made = await Promise.all(pipelines.map((one) => pipelineOf(repo, one, parentsOf)));
+    const made = await Promise.all(pipelines.map((one) => pipelineOf(repo, one, lookups)));
     const checks = checksOf(made.filter((one) => one !== undefined && one.sourceSha === mr.sha).map((one) => one!));
     const last = seen.checks.get(mr.iid);
     if (last?.head === mr.sha && last.state === checks.state) continue;

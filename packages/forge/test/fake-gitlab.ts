@@ -249,8 +249,10 @@ export class FakeGitLab {
     };
   }
 
-  #pipelineJson(project: FakeProject, pipeline: FakePipeline): unknown {
-    return { id: pipeline.id, project_id: project.id, sha: pipeline.sha, ref: pipeline.ref, status: pipeline.status, source: pipeline.source, tag: pipeline.tag, updated_at: pipeline.updated_at };
+  /** A pipeline as the server shows it: a list gives the short form, which does not say whether the ref is a tag. */
+  #pipelineJson(project: FakeProject, pipeline: FakePipeline, short = false): unknown {
+    const fields = { id: pipeline.id, project_id: project.id, sha: pipeline.sha, ref: pipeline.ref, status: pipeline.status, source: pipeline.source, updated_at: pipeline.updated_at };
+    return short ? fields : { ...fields, tag: pipeline.tag };
   }
 
   #jobJson(job: FakeJob): unknown {
@@ -341,7 +343,7 @@ export class FakeGitLab {
       const mr = mrOf(hit[1]);
       if (mr === undefined) return notFound;
       const items = project.pipelines.filter((one) => one.ref.startsWith(`refs/merge-requests/${String(mr.iid)}/`)).reverse();
-      return { status: 200, body: items.map((one) => this.#pipelineJson(project, one)) };
+      return { status: 200, body: items.map((one) => this.#pipelineJson(project, one, true)) };
     }
     if (method === "GET" && (hit = m(/^\/merge_requests\/(\d+)\/discussions$/))) {
       return { status: 200, body: project.discussions.filter((one) => one.mr === Number(hit?.[1])).map((one) => ({ id: one.id, notes: one.notes.map((note) => ({ ...note, author: { username: note.author } })) })) };
@@ -369,7 +371,7 @@ export class FakeGitLab {
       const items = project.pipelines
         .filter((one) => (query["sha"] === undefined || one.sha === query["sha"]) && (query["updated_after"] === undefined || one.updated_at > query["updated_after"]))
         .reverse();
-      return { status: 200, body: items.map((one) => this.#pipelineJson(project, one)) };
+      return { status: 200, body: items.map((one) => this.#pipelineJson(project, one, true)) };
     }
     if (method === "POST" && rest === "/pipeline") {
       const made = this.pipeline(project, { sha: sha(`${String(body.ref)}-tip`), ref: body.ref, status: "created", source: "api" });

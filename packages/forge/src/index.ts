@@ -58,7 +58,7 @@ import {
 import { ForgeError } from "./gitlab.ts";
 import type { FetchLike, GitLab } from "./gitlab.ts";
 import { cancelMerge, checkMerge, merge, pendingMerges } from "./merge.ts";
-import { checksOf, kindOf, pipelineOf, pullRequestOf, runStateOf } from "./normalize.ts";
+import { checksOf, kindOf, lookupsOf, pipelineOf, pullRequestOf, runStateOf } from "./normalize.ts";
 import { DEFAULT_INTERVALS, Poller, sync } from "./observe.ts";
 import type { PollIntervals } from "./observe.ts";
 import { observedPrs } from "./prs.ts";
@@ -197,17 +197,9 @@ export function forge(options: ForgeOptions): Plugin {
         };
       });
     }
-    const parentsOf = (client: GitLab, repo: Repo) => async (sha: string) => {
-      try {
-        return (await client.get<{ parent_ids: string[] }>(projectPath(repo, `/repository/commits/${sha}`))).parent_ids;
-      } catch (error) {
-        if (error instanceof ForgeError && error.code === "not-found") return undefined;
-        throw error;
-      }
-    };
     const pipelinesOf = async (repo: Repo, raw: readonly GitLabPipeline[]): Promise<Pipeline[]> => {
-      const client = gitlab(repo.host);
-      const made = await Promise.all(raw.map((one) => pipelineOf(repo, one, parentsOf(client, repo))));
+      const lookups = lookupsOf(gitlab(repo.host), repo);
+      const made = await Promise.all(raw.map((one) => pipelineOf(repo, one, lookups)));
       return made.filter((one): one is Pipeline => one !== undefined);
     };
 

@@ -16,6 +16,7 @@ import {
   PrMerged,
   PrOpened,
   Pushed,
+  forgePipelineRead,
   forgePrMerge,
   forgePrMergePending,
   forgeRepoSync,
@@ -128,6 +129,19 @@ test("a pipeline is written at each state it was seen in, and a merge result wit
     ["running", undefined],
     ["success", "running"],
   ]);
+});
+
+test("a tag's pipeline is a tag however it is read, though a list does not say that its ref is one", async () => {
+  const host = await watched();
+  const tagged = host.server.pipeline(host.billing, { sha: sha("v1-tip"), ref: "v1.0", tag: true, status: "success" });
+  host.server.pipeline(host.billing, { sha: sha("main-tip"), ref: "main" });
+  await syncNow(host);
+  const recorded = (await dataOf(host, PipelineObserved.name)).map((one) => [one["ref"], one["kind"]]);
+  expect(recorded).toEqual([["v1.0", "tag"], ["main", "branch"]]);
+  const read = (input: object) => host.niwa.call(forgePipelineRead, { repo: BILLING, ...input });
+  expect((await read({ sha: sha("v1-tip") })).items.map((one) => one.kind)).toEqual(["tag"]);
+  expect((await read({ pipeline: tagged.id })).items.map((one) => one.kind)).toEqual(["tag"]);
+  expect((await read({ sha: sha("v1-tip"), kind: "tag" })).items).toHaveLength(1);
 });
 
 test("the checks of a pull request follow the pipelines of its head", async () => {
