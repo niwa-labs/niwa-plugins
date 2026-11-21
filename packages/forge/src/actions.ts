@@ -89,6 +89,47 @@ export const forgePrRead = actionRef("forge.pr.read", {
   target: (input) => repoTarget(input.repo),
 });
 
+/** A pull request as the module observed it: where it stands and the pipelines seen for it. */
+export const PrState = z.enum(["open", "merged", "closed"]);
+export type PrState = z.infer<typeof PrState>;
+
+/** A pipeline of a pull request, in the state the module last saw it. */
+export const PrPipeline = z.strictObject({
+  pipeline: Number_,
+  kind: PipelineKind,
+  state: RunState,
+  sourceSha: Sha,
+  targetSha: Sha.optional(),
+  mergeSha: Sha.optional(),
+});
+export type PrPipeline = z.infer<typeof PrPipeline>;
+
+export const ObservedPr = z.strictObject({
+  pr: PrRef,
+  state: PrState,
+  title: z.string(),
+  branch: z.string().min(1),
+  base: z.string().min(1),
+  draft: z.boolean(),
+  author: z.string().optional(),
+  /** The head last seen; absent while no observation of it was written. */
+  head: Sha.optional(),
+  /** What the pipelines of the head say, as of the last check the module made. */
+  checks: ChecksState,
+  /** The latest pipelines of the pull request, newest first. */
+  pipelines: z.array(PrPipeline),
+});
+export type ObservedPr = z.infer<typeof ObservedPr>;
+
+export const forgePrList = actionRef("forge.pr.list", {
+  description:
+    "List the pull requests the module observed in the repositories it watches, the open ones first and the latest changed first: " +
+    "title, branches, state, head, what the pipelines of the head say, and the latest pipelines of each. It reads what was recorded " +
+    "and asks the server nothing; `forge.pr.read` asks the server. `repo` keeps one repository, `state` those in one state.",
+  input: z.strictObject({ repo: RepoName.optional(), state: PrState.optional() }),
+  output: z.strictObject({ items: z.array(ObservedPr) }),
+});
+
 export const forgeChecksRead = actionRef("forge.checks.read", {
   description:
     "What the pipelines of the head of a pull request say: none, pending, green or red, from its latest pipeline on that head.",

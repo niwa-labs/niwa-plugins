@@ -45,6 +45,7 @@ import {
   forgePrEnsure,
   forgePrMerge,
   forgePrMergeCancel,
+  forgePrList,
   forgePrMergePending,
   forgePrRead,
   forgePrRetarget,
@@ -60,6 +61,7 @@ import { cancelMerge, checkMerge, merge, pendingMerges } from "./merge.ts";
 import { checksOf, kindOf, pipelineOf, pullRequestOf, runStateOf } from "./normalize.ts";
 import { DEFAULT_INTERVALS, Poller, sync } from "./observe.ts";
 import type { PollIntervals } from "./observe.ts";
+import { observedPrs } from "./prs.ts";
 import type { GitLabJob, GitLabMr, GitLabPipeline } from "./normalize.ts";
 import { FORGE_TYPES, MergeArmed, MergeDisarmed, Pushed, RepoUnwatched, RepoWatched } from "./record-types.ts";
 import type { Pipeline, Repo } from "./record-types.ts";
@@ -564,6 +566,15 @@ export function forge(options: ForgeOptions): Plugin {
           const cancelled = await cancelMerge(gitlab(repo.host), { repo, number: input.number }, journal(), (data) => ctx.emit(MergeDisarmed, data));
           return { cancelled };
         },
+      }),
+    );
+
+    api.action(
+      action(forgePrList, {
+        recovery: "repeat",
+        effect: "read",
+        world: "niwa",
+        run: (input) => ({ items: observedPrs(journal(), input) }),
       }),
     );
 

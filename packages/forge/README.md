@@ -19,6 +19,8 @@ value never reaches the journal. `fetch` may be passed to speak to a fake server
   fills a template such as `forge.pr.merge@{repo.host}/{repo.path}/pr/*`.
 - `forge.pr.merge` is irreversible. A merge the server takes for later is
   listed by `forge.pr.merge.pending`, with the action that calls it off.
+- `forge.pr.list` lists the pull requests the module observed (open ones first) with the checks of each head and
+  its latest pipelines; it reads what was recorded and asks the server nothing.
 - `forge.repo.watch` records a repository; the module then polls it. Events of
   the server's log are recorded under their event ids; changes of pull
   requests, pipelines, jobs and checks as numbered observations with the state
