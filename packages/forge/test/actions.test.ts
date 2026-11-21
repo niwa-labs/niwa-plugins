@@ -181,6 +181,20 @@ test("a secret value the server repeats in an error is not in the error, nor in 
   expect(JSON.stringify(await host.records())).not.toContain("s3cr3t-deploy-value");
 });
 
+test("a job log counts the bytes the server sent, and a tail that starts inside a character starts after it", async () => {
+  const host = await served();
+  const pipeline = host.server.pipeline(host.billing, { sha: sha("main"), ref: "main" });
+  const bad = new Uint8Array([0xff, 0xfe, 0xff]);
+  const text = new TextEncoder().encode(`${"é".repeat(40)}end\n`);
+  const trace = new Uint8Array([...bad, ...text]);
+  const job = host.server.job(host.billing, { pipeline: pipeline.id, ref: "main", trace });
+  const whole = await host.niwa.call(forgeJobLog, { repo: BILLING, job: job.id });
+  expect(whole).toMatchObject({ truncated: false, size: trace.length });
+  const tail = await host.niwa.call(forgeJobLog, { repo: BILLING, job: job.id, bytes: 7 });
+  expect(tail).toMatchObject({ truncated: true, size: trace.length });
+  expect(tail.log).toBe("éend\n");
+});
+
 test("a secret value that crosses the bound of the error message is taken out before the message is cut", async () => {
   const host = await served({ env: { NIWA_SECRET_DEPLOY_KEY: "s3cr3t-deploy-value" } });
   host.server.queue("POST", /\/pipeline$/, 400, { message: `${"x".repeat(480)}DEPLOY_KEY=s3cr3t-deploy-value is not allowed` });

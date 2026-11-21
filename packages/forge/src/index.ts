@@ -352,11 +352,9 @@ export function forge(options: ForgeOptions): Plugin {
         world: "external",
         async run(input) {
           const repo = await repoOf(input.repo);
-          const whole = await gitlab(repo.host).text(projectPath(repo, `/jobs/${String(input.job)}/trace`));
-          const bytes = Buffer.from(whole, "utf8");
           const keep = input.bytes ?? LOG_BYTES;
-          const truncated = bytes.length > keep;
-          return { job: input.job, log: truncated ? bytes.subarray(bytes.length - keep).toString("utf8") : whole, size: bytes.length, truncated };
+          const { text, size } = await gitlab(repo.host).tail(projectPath(repo, `/jobs/${String(input.job)}/trace`), keep);
+          return { job: input.job, log: text, size, truncated: size > keep };
         },
       }),
     );

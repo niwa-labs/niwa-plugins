@@ -40,7 +40,8 @@ export interface FakeJob {
   stage: string;
   status: string;
   ref: string;
-  trace: string;
+  /** The log: text, or the bytes of a log that is not valid UTF-8. */
+  trace: string | Uint8Array;
 }
 
 export interface FakeNote {
@@ -427,6 +428,7 @@ export class FakeGitLab {
 }
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+  if (body instanceof Uint8Array) return new Response(body, { status, headers: { "Content-Type": "text/plain", ...headers } });
   if (typeof body === "string") return new Response(body, { status, headers: { "Content-Type": "text/plain", ...headers } });
   return new Response(body === null ? null : JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
 }

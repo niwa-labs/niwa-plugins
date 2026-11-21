@@ -111,10 +111,34 @@ export class GitLab {
     return items;
   }
 
-  /** Read the text of a resource, such as the log of a job. */
-  async text(path: string): Promise<string> {
+  /**
+   * Read the end of a resource that may be large, such as the log of a job: the last `keep` bytes
+   * and how many bytes the whole was. The body is streamed and only the tail is held; it is decoded
+   * after it is chosen, from the first whole character.
+   */
+  async tail(path: string, keep: number): Promise<{ text: string; size: number }> {
     const response = await this.#fetch("GET", this.#url(path, {}), {});
-    return await response.text();
+    const chunks: Uint8Array[] = [];
+    let held = 0;
+    let size = 0;
+    const reader = response.body?.getReader();
+    for (let chunk = await reader?.read(); chunk !== undefined && !chunk.done; chunk = await reader?.read()) {
+      chunks.push(chunk.value);
+      held += chunk.value.length;
+      size += chunk.value.length;
+      // The oldest chunk goes once the ones after it hold the tail.
+      while (chunks.length > 1 && held - (chunks[0]?.length ?? 0) >= keep) held -= chunks.shift()?.length ?? 0;
+    }
+    const bytes = new Uint8Array(held);
+    let at = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, at);
+      at += chunk.length;
+    }
+    let start = Math.max(0, held - keep);
+    // A cut inside a character leaves its continuation bytes: start after them.
+    while (start > 0 && start < held && ((bytes[start] ?? 0) & 0xc0) === 0x80) start += 1;
+    return { text: new TextDecoder().decode(bytes.subarray(start)), size };
   }
 
   /**
