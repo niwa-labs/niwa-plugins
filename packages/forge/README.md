@@ -29,3 +29,6 @@ value never reaches the journal. `fetch` may be passed to speak to a fake server
 - `/flow`: `untilPipeline` and `land` for workflow scripts.
 - `pushReaction`: a built-in workflow that, on a push to a branch, names the
   git worktrees made from it.
+
+`./cockpit` is the plugin's page: the watched repositories, the merges the server holds for later with a button that calls
+each off, and the observed pull requests with the checks of their heads and their latest pipelines.
