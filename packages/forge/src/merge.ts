@@ -173,24 +173,29 @@ export async function cancelMerge(gitlab: GitLab, pr: PrRef, journal: JournalRea
   const externalId = externalIdOf(pr);
   const known = pendingMerges(journal).find((one) => one.externalId === externalId);
   const mrPath = projectPath(pr.repo, `/merge_requests/${String(pr.number)}`);
-  const tries: Array<() => Promise<unknown>> = [
-    () => gitlab.send("POST", `${mrPath}/cancel_merge_when_pipeline_succeeds`),
-    () => gitlab.send("DELETE", projectPath(pr.repo, `/merge_trains/merge_requests/${String(pr.number)}`)),
+  const tries: Array<{ mode: "auto-merge" | "train"; call: () => Promise<unknown> }> = [
+    { mode: "auto-merge", call: () => gitlab.send("POST", `${mrPath}/cancel_merge_when_pipeline_succeeds`) },
+    { mode: "train", call: () => gitlab.send("DELETE", projectPath(pr.repo, `/merge_trains/merge_requests/${String(pr.number)}`)) },
   ];
   if (known?.mode === "train") tries.reverse();
-  let asked = false;
+  let answeredBy: "auto-merge" | "train" | undefined;
   for (const attempt of tries) {
     try {
-      if (!refusedInBody(await attempt())) asked = true;
-      if (asked) break;
+      if (!refusedInBody(await attempt.call())) {
+        answeredBy = attempt.mode;
+        break;
+      }
     } catch (error) {
       // Nothing to call off on this side: the other one may have it.
       if (!(error instanceof ForgeError) || (error.code !== "not-found" && error.status !== 406 && error.status !== 405)) throw error;
     }
   }
+  const asked = answeredBy !== undefined;
   const mr = await gitlab.get<GitLabMr>(mrPath);
   if (mr.state === "merged") return false;
-  const armed = mr.state === "opened" && (mr.merge_when_pipeline_succeeds === true || (await inTrain(gitlab, pr)));
+  // The train is asked about only where the merge was in one: merge trains are not on every server.
+  const trained = known?.mode === "train" || answeredBy === "train";
+  const armed = mr.state === "opened" && (mr.merge_when_pipeline_succeeds === true || (trained && (await inTrain(gitlab, pr))));
   if (armed) return false;
   if (asked || known !== undefined) await emit({ pr, externalId });
   return asked;

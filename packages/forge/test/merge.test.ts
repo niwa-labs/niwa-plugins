@@ -176,3 +176,12 @@ test("a cancel that finds the pull request merged does not say the merge was cal
   expect(await host.niwa.call(forgePrMergeCancel, { repo: BILLING, number: 7 })).toEqual({ cancelled: false });
   expect(await host.records(["forge.pr.merge.disarmed"])).toEqual([]);
 });
+
+test("calling off an automatic merge does not ask about a merge train, which a server may not have", async () => {
+  const host = await served();
+  await host.niwa.call(forgePrMerge, { ...ask, when: "pipeline" });
+  host.server.queue("GET", /merge_trains/, 403, { message: "403 Forbidden" });
+  expect(await host.niwa.call(forgePrMergeCancel, { repo: BILLING, number: 7 })).toEqual({ cancelled: true });
+  expect(host.server.seen("GET", /merge_trains/)).toEqual([]);
+  expect(await host.records(["forge.pr.merge.disarmed"])).toHaveLength(1);
+});

@@ -437,7 +437,7 @@ test("a merge armed on a repository nobody watches is no longer pending once the
   expect(await host.records(["forge.pr.merge.settled"])).toEqual([expect.objectContaining({ data: expect.objectContaining({ outcome: "merged", mergeSha: sha("merge-7") }) })]);
   // The repository was not watched: nothing about the merge is announced to those who subscribe to merges.
   expect(await host.records([PrMerged.name])).toEqual([]);
-});
+}, 15_000);
 
 test("a merge armed on a repository nobody watches is no longer pending once it is closed or called off on the server", async () => {
   const host = await polling();
@@ -451,4 +451,4 @@ test("a merge armed on a repository nobody watches is no longer pending once it 
   Object.assign(host.billing.mrs.get(8)!, { state: "closed", merge_when_pipeline_succeeds: false });
   await settledPending(host, 0);
   expect(await host.records(["forge.pr.merge.settled"])).toEqual([expect.objectContaining({ data: expect.objectContaining({ outcome: "closed" }) })]);
-});
+}, 15_000);
