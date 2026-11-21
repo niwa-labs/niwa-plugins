@@ -48,6 +48,14 @@ export function durationMs(duration: Duration): number {
   return Number(parsed[1]) * (UNITS[parsed[2] as string] as number);
 }
 
+/**
+ * The repository as the actions name it, `{ host, path }`: a record holds more (the project id), and
+ * an action takes no more than its target names.
+ */
+function nameOf(repo: RepoName): RepoName {
+  return { host: repo.host, path: repo.path };
+}
+
 /** How long one wait lasts before the helper reads the server again. */
 const ROUND_MS = 300_000;
 
@@ -79,10 +87,11 @@ export async function untilPipeline(
   const api = script();
   const started = await api.now({ label: `${key}-start` });
   const until = started + durationMs(opts.deadline);
-  const filter = { "repo.host": opts.repo.host, "repo.path": opts.repo.path, sourceSha: opts.sha, ...(opts.kind === undefined ? {} : { kind: opts.kind }) };
+  const repo = nameOf(opts.repo);
+  const filter = { "repo.host": repo.host, "repo.path": repo.path, sourceSha: opts.sha, ...(opts.kind === undefined ? {} : { kind: opts.kind }) };
   let from: number | undefined;
   for (let round = 1; ; round += 1) {
-    const read = await api.call(forgePipelineRead.name, { repo: opts.repo, sha: opts.sha, ...(opts.kind === undefined ? {} : { kind: opts.kind }) }, { label: `${key}-read-${String(round)}` });
+    const read = await api.call(forgePipelineRead.name, { repo, sha: opts.sha, ...(opts.kind === undefined ? {} : { kind: opts.kind }) }, { label: `${key}-read-${String(round)}` });
     const settled = verdictOf((read as { items: Pipeline[] }).items);
     if (settled !== undefined) return settled;
     const now = await api.now({ label: `${key}-now-${String(round)}` });
@@ -117,14 +126,15 @@ export async function land(
   opts: { pr: PrRefGiven; expectHead: string; method: "merge" | "squash" | "rebase"; auto?: boolean; deadline?: Duration },
 ): Promise<LandOutcome> {
   const api = script();
+  const repo = nameOf(opts.pr.repo);
   const asked = (await api.call(
     forgePrMerge.name,
-    { repo: opts.pr.repo, number: opts.pr.number, expectHead: opts.expectHead, method: opts.method, when: opts.auto === true ? "pipeline" : "now" },
+    { repo, number: opts.pr.number, expectHead: opts.expectHead, method: opts.method, when: opts.auto === true ? "pipeline" : "now" },
     { label: `${key}-merge` },
   )) as MergeOutcome;
   if (asked.outcome === "merged") return { outcome: "merged", sha: asked.sha };
   if (asked.outcome === "refused") return { outcome: "refused", why: asked.why };
-  const filter = { "pr.repo.host": opts.pr.repo.host, "pr.repo.path": opts.pr.repo.path, "pr.number": opts.pr.number };
+  const filter = { "pr.repo.host": repo.host, "pr.repo.path": repo.path, "pr.number": opts.pr.number };
   const timeout = durationMs(opts.deadline ?? "2h");
   const ended = await api.race(`${key}-end`, {
     merged: () => api.wait(PrMerged.name, { filter, timeout, label: `${key}-merged` }),

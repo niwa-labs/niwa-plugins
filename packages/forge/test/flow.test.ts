@@ -3,6 +3,7 @@
 
 import { afterEach, expect, test } from "bun:test";
 
+import { forgePipelineRead, forgePrMerge, forgePrRead } from "../src/actions.ts";
 import { durationMs, land, untilPipeline } from "../src/flow.ts";
 import { sha } from "./fake-gitlab.ts";
 
@@ -25,6 +26,9 @@ function scriptWith(answers: { calls: Record<string, any[]>; waits?: Record<stri
   const clock = [...(answers.clock ?? [])];
   globals.call = async (name: string, input: unknown, opts?: { label?: string }) => {
     seen.calls.push({ name, input, ...(opts?.label === undefined ? {} : { label: opts.label }) });
+    // The host holds a call to the schema of its action: so does the script.
+    const refs = { [forgePipelineRead.name]: forgePipelineRead, [forgePrMerge.name]: forgePrMerge, [forgePrRead.name]: forgePrRead };
+    refs[name]?.input.parse(input);
     const next = answers.calls[name]?.shift();
     if (next === undefined) throw new Error(`no answer for ${name}`);
     return next;
@@ -117,4 +121,19 @@ test("a pipeline that waits on a manual job is still pending, as the checks of a
     clock: [0, 1_000],
   });
   expect(await untilPipeline("ci", { repo, sha: head, deadline: "40m" })).toEqual({ outcome: "green", pipeline: 5 });
+});
+
+test("the helpers take the repository of a record, whose project id the actions do not", async () => {
+  const known = { ...repo, projectId: 42 };
+  const seen = scriptWith({
+    calls: {
+      "forge.pipeline.read": [{ items: [pipeline(5, "success")] }],
+      "forge.pr.merge": [{ outcome: "merged", sha: sha("m"), externalId: "x" }],
+    },
+    clock: [0],
+  });
+  expect(await untilPipeline("ci", { repo: known, sha: head, deadline: "40m" })).toEqual({ outcome: "green", pipeline: 5 });
+  expect(seen.calls[0]?.input.repo).toEqual(repo);
+  expect(await land("land", { pr: { repo: known, number: 7 }, expectHead: head, method: "merge" })).toMatchObject({ outcome: "merged" });
+  expect(seen.calls[1]?.input.repo).toEqual(repo);
 });
