@@ -2,7 +2,8 @@
 // module over a fake GitLab server: the script waits for and reads forge records by the builders and
 // gets the data typed, and the check of the script follows a builder to the record it names.
 //
-// A script here imports the module by the path of its entry file, not by the name of the package.
+// A script here imports the module by the path of its entry file; a stored script imports it by the
+// name of the package, as a delivery script in a repository that depends on forge does.
 
 import { afterEach, expect, test } from "bun:test";
 import { realpathSync } from "node:fs";
@@ -123,21 +124,44 @@ test("the check of a script holds the data of a builder's wait to the record's s
   expect(wrong.map((one) => one.code)).toEqual(["TS2339"]);
 }, 60_000);
 
-test("a stored script imports forge's flow helpers by the name of the package", async () => {
-  const host = await served();
-  // The script is written where the package is installed, as a delivery script in a repository that depends on forge is.
+/**
+ * Register a script written where the package is installed, as a delivery script in a repository that
+ * depends on forge is: the stored copy imports `@niwa-labs/forge/flow` by the name of the package.
+ */
+async function registeredByName(host: ForgeHost, name: string, lines: readonly string[]): Promise<string> {
   const dir = join(host.home, "by-name");
   await mkdir(join(dir, "node_modules", "@niwa-labs"), { recursive: true });
-  await symlink(realpathSync(join(import.meta.dir, "..")), join(dir, "node_modules", "@niwa-labs", "forge"), "dir");
-  const file = join(dir, "land.ts");
-  await writeFile(
-    file,
-    [
-      'import { durationMs, land } from "@niwa-labs/forge/flow";',
-      'export default workflow({ description: "Land with the forge helpers", output: z.json() }, async () => ({ minute: durationMs("1m"), land: typeof land }));',
-    ].join("\n"),
-  );
-  const { id } = await call(host, "workflow.register", { file });
+  await symlink(realpathSync(join(import.meta.dir, "..")), join(dir, "node_modules", "@niwa-labs", "forge"), "dir").catch(() => undefined);
+  const file = join(dir, name);
+  await writeFile(file, lines.join("\n"));
+  return (await call(host, "workflow.register", { file })).id;
+}
+
+test("a stored script imports forge's flow helpers by the name of the package", async () => {
+  const host = await served();
+  const id = await registeredByName(host, "land.ts", [
+    'import { durationMs, land } from "@niwa-labs/forge/flow";',
+    'export default workflow({ description: "Land with the forge helpers", output: z.json() }, async () => ({ minute: durationMs("1m"), land: typeof land }));',
+  ]);
   const { run } = await call(host, "workflow.start", { id });
   expect(await resultOf(host, run)).toEqual({ status: "done", result: { minute: 60_000, land: "function" } });
+}, 60_000);
+
+test("an automatic landing in a stored script ends when the merge is recorded, not when its other waits time out", async () => {
+  const host = await served();
+  const mr = openMr(host);
+  await sync(host);
+  const id = await registeredByName(host, "land-auto.ts", [
+    'import { land } from "@niwa-labs/forge/flow";',
+    `const repo = ${REPO};`,
+    'export default workflow({ description: "Land when the pipeline passes", uses: ["niwa.records.read", "forge.pr.merge@gitlab.example.com/acme/billing/pr/7", "forge.pr.read@gitlab.example.com/acme/billing/pr/7"], output: z.json() }, async () =>',
+    `  land("land", { pr: { repo, number: 7 }, expectHead: ${JSON.stringify(sha("topic-1"))}, method: "merge", auto: true }));`,
+  ]);
+  const { run } = await call(host, "workflow.start", { id });
+  await suspended(host);
+  expect(mr.merge_when_pipeline_succeeds).toBe(true);
+  Object.assign(mr, { state: "merged", merge_commit_sha: sha("merge-7") });
+  host.server.event(host.billing, { action_name: "accepted", target_type: "MergeRequest", target_iid: 7, author: { username: "marge" } });
+  await sync(host);
+  expect(await resultOf(host, run)).toEqual({ status: "done", result: { outcome: "merged", sha: sha("merge-7") } });
 }, 60_000);
