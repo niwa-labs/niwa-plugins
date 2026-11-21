@@ -26,7 +26,9 @@ value never reaches the journal. `fetch` may be passed to speak to a fake server
   requests, pipelines, jobs and checks as numbered observations with the state
   before them.
 - `/records`: record types, action references and target helpers.
-- `/flow`: `untilPipeline` and `land` for workflow scripts.
+- `/flow`: `untilPipeline` and `land` for workflow scripts. `land` with `auto`
+  reads the pull request between its waits, so a script that uses it lists
+  `forge.pr.read` on the repository next to `forge.pr.merge`.
 - `pushReaction`: a built-in workflow that, on a push to a branch, names the
   git worktrees made from it.
 

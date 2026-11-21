@@ -7,8 +7,8 @@
  * two helpers in one script need two keys.
  */
 
-import { forgePipelineRead, forgePrMerge } from "./actions.ts";
-import type { MergeOutcome } from "./actions.ts";
+import { forgePipelineRead, forgePrMerge, forgePrRead } from "./actions.ts";
+import type { MergeOutcome, PullRequest } from "./actions.ts";
 import { verdictOf as stateVerdict } from "./normalize.ts";
 import { MergeDisarmed, PipelineObserved, PrClosed, PrMerged } from "./record-types.ts";
 import type { Pipeline, PipelineKind } from "./record-types.ts";
@@ -120,6 +120,11 @@ export type LandOutcome = { outcome: "merged"; sha: string } | { outcome: "refus
  * the pipeline succeeds and the helper waits for the merge, until `deadline` (default 2h): a pull
  * request merged at another head, closed, or called off is refused; still waiting at the deadline is
  * `queued-unknown`, for the server still has it.
+ *
+ * The module's records of the merge are waited for in rounds, and between rounds the pull request is
+ * read from the server (`forge.pr.read` on the repository must be in the script's `uses`): a merge
+ * recorded before the waits began, or never recorded because the repository is not watched, is found
+ * by the read, and so is a merge the server dropped without a record.
  */
 export async function land(
   key: string,
@@ -135,19 +140,31 @@ export async function land(
   if (asked.outcome === "merged") return { outcome: "merged", sha: asked.sha };
   if (asked.outcome === "refused") return { outcome: "refused", why: asked.why };
   const filter = { "pr.repo.host": repo.host, "pr.repo.path": repo.path, "pr.number": opts.pr.number };
-  const timeout = durationMs(opts.deadline ?? "2h");
-  const ended = await api.race(`${key}-end`, {
-    merged: () => api.wait(PrMerged.name, { filter, timeout, label: `${key}-merged` }),
-    closed: () => api.wait(PrClosed.name, { filter, timeout, label: `${key}-closed` }),
-    disarmed: () => api.wait(MergeDisarmed.name, { filter, timeout, label: `${key}-disarmed` }),
-  });
-  const waited = ended.value;
-  if ("timedOut" in waited) return { outcome: "queued-unknown", why: `the server took the merge as ${asked.externalId} and has not made it yet` };
-  if (ended.key === "closed") return { outcome: "refused", why: `${asked.externalId} was closed before the server merged it` };
-  if (ended.key === "disarmed") return { outcome: "refused", why: `the merge of ${asked.externalId} was called off` };
-  const merged = waited.data as { head?: string; mergeSha?: string };
-  if (merged.head !== undefined && merged.head !== opts.expectHead) {
-    return { outcome: "refused", why: `${asked.externalId} was merged at ${merged.head}, not at ${opts.expectHead}` };
+  const started = await api.now({ label: `${key}-start` });
+  const until = started + durationMs(opts.deadline ?? "2h");
+  const mergedAt = (head: string | undefined, sha: string | undefined): LandOutcome =>
+    head !== undefined && head !== opts.expectHead
+      ? { outcome: "refused", why: `${asked.externalId} was merged at ${head}, not at ${opts.expectHead}` }
+      : { outcome: "merged", sha: sha ?? opts.expectHead };
+  for (let round = 1; ; round += 1) {
+    const now = round === 1 ? started : await api.now({ label: `${key}-now-${String(round)}` });
+    if (now >= until && round > 1) return { outcome: "queued-unknown", why: `the server took the merge as ${asked.externalId} and has not made it yet` };
+    const timeout = Math.max(1, Math.min(ROUND_MS, until - now));
+    const ended = await api.race(`${key}-end-${String(round)}`, {
+      merged: () => api.wait(PrMerged.name, { filter, timeout, label: `${key}-merged-${String(round)}` }),
+      closed: () => api.wait(PrClosed.name, { filter, timeout, label: `${key}-closed-${String(round)}` }),
+      disarmed: () => api.wait(MergeDisarmed.name, { filter, timeout, label: `${key}-disarmed-${String(round)}` }),
+    });
+    const waited = ended.value;
+    if (!("timedOut" in waited)) {
+      if (ended.key === "closed") return { outcome: "refused", why: `${asked.externalId} was closed before the server merged it` };
+      if (ended.key === "disarmed") return { outcome: "refused", why: `the merge of ${asked.externalId} was called off` };
+      const merged = waited.data as { head?: string; mergeSha?: string };
+      return mergedAt(merged.head, merged.mergeSha);
+    }
+    const read = (await api.call(forgePrRead.name, { repo, number: opts.pr.number }, { label: `${key}-read-${String(round)}` })) as PullRequest;
+    if (read.state === "merged") return mergedAt(read.head, read.mergeSha);
+    if (read.state === "closed") return { outcome: "refused", why: `${asked.externalId} was closed before the server merged it` };
+    if (read.state === "open" && !read.autoMerge) return { outcome: "refused", why: `the server no longer holds the merge of ${asked.externalId}` };
   }
-  return { outcome: "merged", sha: merged.mergeSha ?? opts.expectHead };
 }

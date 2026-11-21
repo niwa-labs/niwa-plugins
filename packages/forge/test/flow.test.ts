@@ -88,19 +88,70 @@ test("landing at once answers the commit the merge made, and a refusal says why"
   expect(await land("again", { pr: { repo, number: 7 }, expectHead: head, method: "merge" })).toEqual({ outcome: "refused", why: "SHA does not match" });
 });
 
+const armed = { outcome: "armed", externalId: "gitlab.example.com/acme/billing!7", cancel: "forge.pr.merge.cancel" };
+const read = (state: string, fields: Record<string, unknown> = {}) => ({
+  pr: { repo: { ...repo, projectId: 42 }, number: 7 },
+  state,
+  title: "t",
+  branch: "topic",
+  base: "main",
+  head,
+  draft: false,
+  autoMerge: state === "open",
+  ...fields,
+});
+const auto = { pr: { repo, number: 7 }, expectHead: head, method: "merge", auto: true } as const;
+
 test("an automatic landing waits for the merge, and a merge at another head is not this landing", async () => {
-  const armed = { outcome: "armed", externalId: "gitlab.example.com/acme/billing!7", cancel: "forge.pr.merge.cancel" };
   scriptWith({ calls: { "forge.pr.merge": [armed] }, waits: { "forge.pr.merged": [{ data: { head, mergeSha: sha("m") }, at: 9 }] } });
-  expect(await land("land", { pr: { repo, number: 7 }, expectHead: head, method: "merge", auto: true })).toEqual({ outcome: "merged", sha: sha("m") });
+  expect(await land("land", auto)).toEqual({ outcome: "merged", sha: sha("m") });
 
   scriptWith({ calls: { "forge.pr.merge": [armed] }, waits: { "forge.pr.merged": [{ data: { head: sha("other") }, at: 9 }] } });
-  expect(await land("land", { pr: { repo, number: 7 }, expectHead: head, method: "merge", auto: true })).toMatchObject({ outcome: "refused" });
+  expect(await land("land", auto)).toMatchObject({ outcome: "refused" });
 
   scriptWith({ calls: { "forge.pr.merge": [armed] }, waits: { "forge.pr.merge.disarmed": [{ data: {}, at: 9 }] } });
-  expect(await land("land", { pr: { repo, number: 7 }, expectHead: head, method: "merge", auto: true })).toMatchObject({ outcome: "refused", why: expect.stringContaining("called off") });
+  expect(await land("land", auto)).toMatchObject({ outcome: "refused", why: expect.stringContaining("called off") });
+});
 
-  scriptWith({ calls: { "forge.pr.merge": [armed] }, waits: { "forge.pr.merged": [{ timedOut: true }] } });
-  expect(await land("land", { pr: { repo, number: 7 }, expectHead: head, method: "merge", auto: true, deadline: "1h" })).toMatchObject({ outcome: "queued-unknown" });
+test("an automatic landing still waiting at the deadline reads the pull request first and is queued-unknown", async () => {
+  const seen = scriptWith({
+    calls: { "forge.pr.merge": [armed], "forge.pr.read": [read("open")] },
+    waits: { "forge.pr.merged": [{ timedOut: true }] },
+    clock: [0, 300_000],
+  });
+  expect(await land("land", { ...auto, deadline: "5m" })).toMatchObject({ outcome: "queued-unknown" });
+  expect(seen.calls.filter((one) => one.name === "forge.pr.read")).toHaveLength(1);
+  expect(seen.waits[0]?.opts.timeout).toBe(300_000);
+});
+
+test("a merge that was recorded before the waits began, or never recorded, is found by reading the pull request", async () => {
+  const seen = scriptWith({
+    calls: { "forge.pr.merge": [armed], "forge.pr.read": [read("merged", { mergeSha: sha("m"), autoMerge: false })] },
+    waits: { "forge.pr.merged": [{ timedOut: true }] },
+    clock: [0],
+  });
+  expect(await land("land", { ...auto, deadline: "2h" })).toEqual({ outcome: "merged", sha: sha("m") });
+  expect(seen.waits.every((one) => one.opts.timeout === 300_000)).toBe(true);
+  expect(seen.calls.at(-1)).toMatchObject({ name: "forge.pr.read", input: { repo, number: 7 } });
+
+  scriptWith({
+    calls: { "forge.pr.merge": [armed], "forge.pr.read": [read("merged", { head: sha("other"), mergeSha: sha("m"), autoMerge: false })] },
+    waits: { "forge.pr.merged": [{ timedOut: true }] },
+    clock: [0],
+  });
+  expect(await land("land", auto)).toMatchObject({ outcome: "refused", why: expect.stringContaining("not at") });
+});
+
+test("a pull request the server no longer holds for merging is refused when the read says so, not after the deadline", async () => {
+  scriptWith({
+    calls: { "forge.pr.merge": [armed], "forge.pr.read": [read("open", { autoMerge: false })] },
+    waits: { "forge.pr.merged": [{ timedOut: true }] },
+    clock: [0],
+  });
+  expect(await land("land", auto)).toMatchObject({ outcome: "refused", why: expect.stringContaining("no longer") });
+
+  scriptWith({ calls: { "forge.pr.merge": [armed], "forge.pr.read": [read("closed", { autoMerge: false })] }, waits: { "forge.pr.merged": [{ timedOut: true }] }, clock: [0, 0] });
+  expect(await land("land", auto)).toMatchObject({ outcome: "refused", why: expect.stringContaining("closed") });
 });
 
 test("durations are milliseconds or a number with a unit", () => {
