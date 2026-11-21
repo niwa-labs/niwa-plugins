@@ -69,7 +69,11 @@ const OfRun = z.object({ run: Text });
 const Scope = z.object({ run: Text, scope: Text, shield: z.boolean().optional() });
 const OfInvocation = z.object({ invocation: Text });
 const Cancelled = z.object({ invocation: Text, except: z.array(z.string()).optional() });
-const Intent = z.object({ invocation: Text, action: z.string(), input: z.unknown() });
+const Intent = z.object({ invocation: Text, key: z.string(), action: z.string(), input: z.unknown() });
+/** The keys of the steps the workflow bridge writes beside the step of a call: `<key>~auth`, `~now`, `~mark`, `~arm`, `~ended`. */
+const ASIDE = /~(auth|now|mark|arm|ended)$/;
+/** The action a sleep records as its step. */
+const WAIT_ACTION = "niwa.wait";
 const InvocationState = z.object({ invocation: Text, state: z.string() });
 const RequestMade = z.object({
   id: Text,
@@ -201,7 +205,10 @@ export class Model {
         if (track === undefined) return;
         if (track.base !== "working") this.become(track, "working", at);
         track.last = at;
-        this.repeat(track, stableJson([data.data.tool ?? null, data.data.permission ?? null]), at);
+        // Only a call of a tool names an operation that can repeat; any other sign of life is just that.
+        if (data.data.tool !== undefined || data.data.permission !== undefined) {
+          this.repeat(track, stableJson([data.data.tool ?? null, data.data.permission ?? null]), at);
+        }
         return;
       }
       case "session.progress": {
@@ -332,7 +339,9 @@ export class Model {
         const track = this.ofInvocation(data.data.invocation);
         if (track === undefined) return;
         track.last = at;
-        this.repeat(track, stableJson([data.data.action, data.data.input]), at);
+        // The steps the bridge adds around a call (its permission, the clock, the arming of a wake) and the
+        // sleep itself are signs of life: they are not the script repeating a call.
+        if (!ASIDE.test(data.data.key) && data.data.action !== WAIT_ACTION) this.repeat(track, stableJson([data.data.action, data.data.input]), at);
         return;
       }
       case "niwa.step.outcome": {

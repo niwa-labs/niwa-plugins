@@ -97,6 +97,16 @@ describe("sessions", () => {
     expect(read(modelOf(rows), me, 27_000)?.state).toBe("working");
   });
 
+  test("activity that names no tool is a sign of life and not a repeated operation", () => {
+    const rows = [...turn(0)];
+    for (let n = 1; n <= 40; n += 1) rows.push(row("session.activity", { session: ME }, n * 1000));
+    expect(read(modelOf(rows), me, 41_000)).toMatchObject({ state: "working", last: 40_000 });
+    // Between calls of one tool it neither adds to the repeats nor breaks them.
+    const calls = [...turn(0)];
+    for (let n = 1; n <= 25; n += 1) calls.push(row("session.activity", { session: ME, tool: "Edit" }, n * 2000), row("session.activity", { session: ME }, n * 2000 + 1000));
+    expect(read(modelOf(calls), me, 60_000)).toMatchObject({ state: "looping", since: 2000 });
+  });
+
   test("a head that moved for the session counts as progress and breaks a loop", () => {
     const rows = [...turn(0)];
     for (let n = 1; n <= 25; n += 1) rows.push(row("session.activity", { session: ME, tool: "Edit" }, n * 1000));
@@ -236,6 +246,29 @@ describe("runs", () => {
 
     const other = modelOf([...rows.slice(0, 5), intent("odd", { repo: "x" }, 6000), intent("k7", { repo: "r" }, 7000)]);
     expect(other.readingOf(run, 8000)?.state).toBe("working");
+  });
+
+  test("the steps the bridge adds around a call do not hide a loop of the calls", () => {
+    const rows = [...started()];
+    for (let n = 1; n <= 6; n += 1) {
+      rows.push(intent(`k${n}~auth`, { verb: "call", name: "git.status" }, n * 1000, "workflow.authorize"), intent(`k${n}`, { repo: "r" }, n * 1000 + 1));
+    }
+    expect(modelOf(rows).readingOf(run, 7000)).toEqual({ subject: run, state: "looping", kind: "looping", since: 1001, last: 6001 });
+    // They are signs of life all the same.
+    const lone = modelOf([...started(), intent("k1~auth", { verb: "call", name: "x" }, 5 * MINUTE, "workflow.authorize")]);
+    expect(lone.readingOf(run, 6 * MINUTE)).toMatchObject({ state: "working", last: 5 * MINUTE });
+  });
+
+  test("a loop of the same sleep is not counted by the clock and the arming around it", () => {
+    const rows = [...started()];
+    for (let n = 1; n <= 6; n += 1) {
+      rows.push(
+        intent(`nap${n}~now`, null, n * 1000, "niwa.now"),
+        intent(`nap${n}~arm`, { at: n * 5000, key: `inv-1:nap${n}` }, n * 1000, "timer.sleep.request"),
+        intent(`nap${n}`, null, n * 1000, "niwa.wait"),
+      );
+    }
+    expect(modelOf(rows).readingOf(run, 7000)).toMatchObject({ state: "working" });
   });
 
   test("a record read twice is counted once", () => {
