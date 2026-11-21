@@ -129,8 +129,8 @@ export const forgeJobRead = actionRef("forge.job.read", {
 });
 
 export const forgeJobLog = actionRef("forge.job.log", {
-  description: "Read the end of the log of a job, at most `bytes` of it (default 64 KiB).",
-  input: z.strictObject({ repo: RepoName, job: Number_, bytes: z.number().int().min(1).max(1_048_576).optional() }),
+  description: "Read the end of the log of a job, at most `bytes` of it (default and most: 64 KiB). The text is the step's outcome.",
+  input: z.strictObject({ repo: RepoName, job: Number_, bytes: z.number().int().min(1).max(65_536).optional() }),
   output: z.strictObject({ job: Number_, log: z.string(), size: z.number().int().nonnegative(), truncated: z.boolean() }),
   target: (input) => repoTarget(input.repo),
 });

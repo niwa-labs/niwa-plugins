@@ -3,7 +3,7 @@
 
 import { afterEach, expect, test } from "bun:test";
 
-import { forgeCommentCreate, forgeCommentRead, forgeJobRun, forgePipelineRetry, forgePipelineTrigger, forgePrClose, forgePrEnsure, forgePrMerge, forgePrRead, forgeRepoList, forgeRepoWatch, secret } from "../src/index.ts";
+import { forgeCommentCreate, forgeCommentRead, forgeJobLog, forgeJobRun, forgePipelineRetry, forgePipelineTrigger, forgePrClose, forgePrEnsure, forgePrMerge, forgePrRead, forgeRepoList, forgeRepoWatch, secret } from "../src/index.ts";
 import { sha } from "./fake-gitlab.ts";
 import { BILLING, forgeHost, openMr } from "./support.ts";
 import type { ForgeHost } from "./support.ts";
@@ -156,4 +156,15 @@ test("a secret value the server repeats in an error is not in the error, nor in 
   expect(String((error as Error).message)).toContain("is not allowed");
   expect(String((error as Error).message)).not.toContain("s3cr3t-deploy-value");
   expect(JSON.stringify(await host.records())).not.toContain("s3cr3t-deploy-value");
+});
+
+test("a job log is read up to a bound that keeps the step's outcome small", async () => {
+  const host = await served();
+  const pipeline = host.server.pipeline(host.billing, { sha: sha("main"), ref: "main" });
+  const job = host.server.job(host.billing, { pipeline: pipeline.id, ref: "main", trace: `start\n${"x".repeat(70_000)}\nend\n` });
+  const log = await host.niwa.call(forgeJobLog, { repo: BILLING, job: job.id });
+  expect(log).toMatchObject({ truncated: true, size: 70_011 });
+  expect(log.log.endsWith("end\n")).toBe(true);
+  expect(Buffer.byteLength(log.log)).toBe(65_536);
+  expect(forgeJobLog.input.safeParse({ repo: BILLING, job: job.id, bytes: 65_537 }).success).toBe(false);
 });
