@@ -116,9 +116,12 @@ export class GitLab {
     return await response.text();
   }
 
-  /** Change something: `POST`, `PUT` or `DELETE`, with a JSON body. */
-  async send<T>(method: "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<T> {
-    const response = await this.#fetch(method, this.#url(path, {}), body === undefined ? {} : { "Content-Type": "application/json" }, body);
+  /**
+   * Change something: `POST`, `PUT` or `DELETE`, with a JSON body. `secrets` are values the body
+   * carries that no error may repeat: a server may echo what it was given.
+   */
+  async send<T>(method: "POST" | "PUT" | "DELETE", path: string, body?: unknown, secrets: readonly string[] = []): Promise<T> {
+    const response = await this.#fetch(method, this.#url(path, {}), body === undefined ? {} : { "Content-Type": "application/json" }, body, secrets);
     if (response.status === 204) return undefined as T;
     const text = await response.text();
     return (text.length === 0 ? undefined : JSON.parse(text)) as T;
@@ -142,16 +145,17 @@ export class GitLab {
     return answer;
   }
 
-  async #fetch(method: string, url: string, headers: Record<string, string>, body?: unknown): Promise<Response> {
+  async #fetch(method: string, url: string, headers: Record<string, string>, body?: unknown, secrets: readonly string[] = []): Promise<Response> {
     const wait = this.waitMs();
     if (wait > 0) {
       throw new ForgeError("rate-limited", `the server's request limit is spent; it may be asked again in ${String(Math.ceil(wait / 1000))}s`, {
         retryAfterMs: wait,
       });
     }
+    const token = this.#options.token();
     const init = {
       method,
-      headers: { Accept: "application/json", ...headers, "PRIVATE-TOKEN": this.#options.token() },
+      headers: { Accept: "application/json", ...headers, "PRIVATE-TOKEN": token },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     };
     let response: Response;
@@ -162,7 +166,7 @@ export class GitLab {
     }
     this.#note(response);
     if (response.ok || response.status === 304) return response;
-    throw await errorOf(method, url, response, this.waitMs());
+    throw await errorOf(method, url, response, this.waitMs(), [token, ...secrets]);
   }
 
   /** Take the server's counts of its limit. */
@@ -193,8 +197,8 @@ function pathOf(url: string): string {
 }
 
 /** The error a failed answer stands for, with what the server said. */
-async function errorOf(method: string, url: string, response: Response, waitMs: number): Promise<ForgeError> {
-  const said = await messageOf(response);
+async function errorOf(method: string, url: string, response: Response, waitMs: number, secrets: readonly string[]): Promise<ForgeError> {
+  const said = await messageOf(response, secrets);
   const what = `${method} ${pathOf(url)}: ${String(response.status)}${said === undefined ? "" : ` ${said}`}`;
   const status = response.status;
   if (status === 429) return new ForgeError("rate-limited", what, { status, retryAfterMs: waitMs });
@@ -206,13 +210,17 @@ async function errorOf(method: string, url: string, response: Response, waitMs: 
   return new ForgeError("server", what, { status });
 }
 
-/** The `message` or `error` of an answer, as text, bounded. */
-async function messageOf(response: Response): Promise<string | undefined> {
+/**
+ * The `message` or `error` of an answer, as text, bounded. The secrets are taken out of the whole
+ * text first: cut before, one that straddles the bound would leave its first characters in.
+ */
+async function messageOf(response: Response, secrets: readonly string[]): Promise<string | undefined> {
   try {
     const body = (await response.json()) as { message?: unknown; error?: unknown };
     const said = body.message ?? body.error;
     if (said === undefined) return undefined;
-    const text = typeof said === "string" ? said : JSON.stringify(said);
+    let text = typeof said === "string" ? said : JSON.stringify(said);
+    for (const value of secrets) if (value.length > 0) text = text.split(value).join("[secret]");
     return text.slice(0, 500);
   } catch {
     return undefined;

@@ -158,6 +158,23 @@ test("a secret value the server repeats in an error is not in the error, nor in 
   expect(JSON.stringify(await host.records())).not.toContain("s3cr3t-deploy-value");
 });
 
+test("a secret value that crosses the bound of the error message is taken out before the message is cut", async () => {
+  const host = await served({ env: { NIWA_SECRET_DEPLOY_KEY: "s3cr3t-deploy-value" } });
+  host.server.queue("POST", /\/pipeline$/, 400, { message: `${"x".repeat(480)}DEPLOY_KEY=s3cr3t-deploy-value is not allowed` });
+  const error = (await host.niwa.call(forgePipelineTrigger, { repo: BILLING, ref: "main", variables: { DEPLOY_KEY: secret("DEPLOY_KEY") } }).catch((caught: unknown) => caught)) as Error;
+  expect(error.message).not.toContain("s3cr3t");
+  expect(error.message).toContain("DEPLOY_KEY=");
+  expect(JSON.stringify(await host.records())).not.toContain("s3cr3t");
+});
+
+test("the token of the host is taken out of what the server says, even when it is cut by the bound", async () => {
+  const host = await served();
+  host.server.queue("GET", /\/merge_requests\/7$/, 400, { message: `${"y".repeat(494)}${host.server.token}` });
+  const error = (await host.niwa.call(forgePrRead, { repo: BILLING, number: 7 }).catch((caught: unknown) => caught)) as Error;
+  expect(error.message).not.toContain("glpat");
+  expect(error.message).toContain("yyyy");
+});
+
 test("a job log is read up to a bound that keeps the step's outcome small", async () => {
   const host = await served();
   const pipeline = host.server.pipeline(host.billing, { sha: sha("main"), ref: "main" });
