@@ -1,13 +1,14 @@
 /** The commitments of the host, one card each: what was promised, by when, where it stands, and a cancel. */
 
-import { useAction, useCall } from "@niwa-labs/cockpit-sdk";
+import { useAction, useCall, useViewer } from "@niwa-labs/cockpit-sdk";
 import { Badge, Button, StateRing } from "@niwa-labs/ui-kit";
 
 import { cancelAction, listAction, type CommitmentItem } from "./actions.ts";
-import { RING, cancellable } from "./cards.ts";
+import { RING, canCancel } from "./cards.ts";
 
 function CommitmentCard({ commitment }: { commitment: CommitmentItem }) {
   const cancel = useAction(cancelAction);
+  const viewer = useViewer();
   return (
     <li data-slot="commitment-card" data-status={commitment.status} className="flex min-w-0 items-center gap-3 rounded-lg border bg-card px-3 py-2 text-card-foreground">
       <StateRing state={RING[commitment.status]} label={commitment.status} />
@@ -19,7 +20,7 @@ function CommitmentCard({ commitment }: { commitment: CommitmentItem }) {
         </span>
       </div>
       {commitment.party === "owner" ? <Badge variant="secondary">for you</Badge> : null}
-      {cancellable(commitment.status) ? (
+      {canCancel(commitment, viewer) ? (
         <Button className="ml-auto" variant="outline" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate({ id: commitment.id })}>
           Cancel
         </Button>
