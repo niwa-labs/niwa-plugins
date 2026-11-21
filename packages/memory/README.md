@@ -30,7 +30,9 @@ kept in its canonical form: `/a/b/../c/` is `/a/c`) and its
 source: the owner's own word, the writer's conclusion, a session up to a
 locator, or a record. Only the owner gives a note the owner as its source;
 his confirmation or correction makes a note his word, and a correction by
-anyone else makes it unconfirmed again. A note written again in the
+anyone else makes it unconfirmed again. A corrected note stands on its new
+text alone: the corrector is its only source, and it earns its place in the
+top layer again unless it was placed by hand. A note written again in the
 same words, in the same order, gains a source instead of a copy.
 
 A note stops being shown first (`memory.drop`), is taken back

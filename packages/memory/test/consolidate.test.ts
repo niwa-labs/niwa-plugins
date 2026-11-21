@@ -136,3 +136,36 @@ test("a note the owner confirmed is never retired, even outside the top layer an
   expect(plan.retired).toEqual([]);
   expect(await view(host, older)).toMatchObject({ status: "live", top: false });
 });
+
+test("a corrected note stands on its new text alone: the sources of the old one and its place in the top layer do not carry over", async () => {
+  const host = await memoryHost({ limits: { liftAfter: 3 } });
+  const note = await noted(host, "Deploys need a review.", { source: session(1) });
+  for (const n of [2, 3]) await noted(host, "Deploys need a review.", { source: session(n) });
+  expect((await host.as<Plan>(rin, "memory.consolidate", {})).lifted).toEqual([note]);
+  expect(await view(host, note)).toMatchObject({ top: true, sources: 3 });
+
+  await host.as(rin, "memory.correct", { note, text: "Deploys need no review." });
+  expect(await view(host, note)).toMatchObject({ top: false, sources: 1, confirmed: false, revision: 2, by: rin, source: { kind: "inferred" } });
+  expect(await host.as<Plan>(rin, "memory.consolidate", {})).toMatchObject({ lifted: [] });
+  expect((await host.as<{ notes: string[] }>(rin, "memory.top", {})).notes).toEqual([]);
+  // The new text earns its own sources.
+  for (const n of [4, 5]) await noted(host, "Deploys need no review.", { source: session(n) });
+  expect(await view(host, note)).toMatchObject({ sources: 3 });
+  expect((await host.as<Plan>(rin, "memory.consolidate", {})).lifted).toEqual([note]);
+});
+
+test("the owner's correction is his word and one source; a note placed by hand keeps its place through a correction", async () => {
+  const host = await memoryHost({ limits: { liftAfter: 3 } });
+  const note = await noted(host, "Deploys need a review.", { source: session(1) });
+  for (const n of [2, 3]) await noted(host, "Deploys need a review.", { source: session(n) });
+  const placed = await noted(host, "Lint runs before tests.");
+  await host.as(rin, "memory.lift", { note: placed });
+  await host.as<Plan>(rin, "memory.consolidate", {});
+
+  await host.as(owner, "memory.correct", { memory: "rin", note, text: "Deploys need two reviews." });
+  expect(await view(host, note)).toMatchObject({ top: false, sources: 1, confirmed: true, by: owner, source: { kind: "owner" } });
+  expect((await host.as<Plan>(rin, "memory.consolidate", {})).lifted).toEqual([note]);
+
+  await host.as(rin, "memory.correct", { note: placed, text: "Lint runs after tests." });
+  expect(await view(host, placed)).toMatchObject({ top: true, pinned: true, sources: 1 });
+});

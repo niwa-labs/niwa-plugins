@@ -103,7 +103,10 @@ export const NoteCorroborated = record(
 /** The owner confirmed a note: it is his word from now on, until it is changed by someone else. */
 export const NoteConfirmed = record("memory.note.confirmed", z.object({ memory: MemoryName, note: NoteId, by: Address }));
 
-/** A note was corrected: its text (and detail) are these from now on. */
+/**
+ * A note was corrected: its text (and detail) are these from now on. The new text is a claim of its own: the
+ * corrector is its only source, and a place in the top layer earned by the old text is not kept.
+ */
 export const NoteCorrected = record(
   "memory.note.corrected",
   z.object({ memory: MemoryName, note: NoteId, text: NoteText, detail: NoteDetail.optional(), by: TurnAuthor }),
@@ -329,7 +332,7 @@ export const memoryConfirm = actionRef("memory.confirm", {
 
 export const memoryCorrect = actionRef("memory.correct", {
   description:
-    "Corrects a note: its text (and detail) are these from now on. A correction by the owner is his word; one by the agent leaves the note unconfirmed.",
+    "Corrects a note: its text (and detail) are these from now on. A correction by the owner is his word; one by the agent leaves the note unconfirmed. The new text has the corrector as its only source, and earns its place in the top layer again.",
   input: z.object({ ...Named, note: NoteId, text: NoteText, detail: NoteDetail.optional() }),
   output: z.object({ note: NoteId, revision: z.number().int().positive() }),
 });

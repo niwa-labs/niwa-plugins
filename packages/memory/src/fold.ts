@@ -225,12 +225,20 @@ export class Memories {
     }
     const corrected = dataAs(stored, NoteCorrected);
     if (corrected !== undefined) {
+      // A new text is a new claim: what backed the old one does not back it, and the one who wrote it is its
+      // only source. It earns its place in the top layer again, unless it was placed by hand.
+      const source: NoteSource = corrected.by.kind === "owner" ? { kind: "owner" } : { kind: "inferred" };
+      this.#sources.set(`${corrected.memory} ${corrected.note}`, new Set([sourceKey(source, corrected.by)]));
       this.#change(corrected.memory, corrected.note, at, (note) => {
         const { detail: _dropped, ...rest } = note;
         return {
           ...rest,
           text: corrected.text,
           ...(corrected.detail === undefined ? {} : { detail: corrected.detail }),
+          source,
+          by: corrected.by,
+          sources: 1,
+          top: note.pinned && note.top,
           revision: note.revision + 1,
           confirmed: corrected.by.kind === "owner",
         };
