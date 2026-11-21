@@ -94,10 +94,11 @@ export interface ForgeOptions {
   readonly poll?: Partial<PollIntervals> | false;
   /**
    * The built-in workflow that tells, on a push to a branch, which git worktrees were made from it
-   * and are now behind. It names the local checkouts of each repository, `<host>/<path>` to absolute
-   * paths. Off by default: it needs the workflow and git modules on the host.
+   * and are now behind. A worktree belongs to the repository when the remote its base pushes to is that
+   * repository; `checkouts` may add local checkouts of a repository, `<host>/<path>` to absolute paths,
+   * for clones whose remote is not verified. Off by default: it needs the workflow and git modules on the host.
    */
-  readonly pushReaction?: { readonly checkouts: Readonly<Record<string, readonly string[]>> };
+  readonly pushReaction?: { readonly checkouts?: Readonly<Record<string, readonly string[]>> };
 }
 
 /** The script of the push reaction, as it ships with the module. */

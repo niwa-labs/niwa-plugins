@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 
 /** A git repository on `main` with one commit. */
-async function repository(): Promise<string> {
+async function repository(remote?: string): Promise<string> {
   const dir = realpathSync(await tempDir("checkout"));
   const run = (...args: string[]) => {
     const done = Bun.spawnSync(["git", ...args], { cwd: dir, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
@@ -28,6 +28,7 @@ async function repository(): Promise<string> {
   writeFileSync(join(dir, "README"), "billing\n");
   run("add", "README");
   run("commit", "-q", "-m", "Start");
+  if (remote !== undefined) run("remote", "add", "origin", remote);
   return dir;
 }
 
@@ -50,6 +51,27 @@ test("on a push to a branch, the run names the worktrees of the repository's che
   await host.niwa.call(forgeRepoWatch, { repo: BILLING });
   host.server.event(host.billing, { action_name: "pushed to", push_data: { ref: "main", ref_type: "branch", commit_from: sha("main-1"), commit_to: sha("main-2") } });
   host.server.event(host.billing, { action_name: "pushed new", push_data: { ref: "v1.0", ref_type: "tag", commit_from: null, commit_to: sha("main-2") } });
+  await host.niwa.call(forgeRepoSync, { repo: BILLING });
+
+  const finished = async () => (await host.records(["workflow.run.finished"])).map((one) => (one.data as { outcome: { result?: unknown } }).outcome.result);
+  await eventually(async () => (await finished()).length >= 1, 20_000, "the push reaction did not finish");
+  expect(await finished()).toEqual([{ ref: "main", behind: [ours.id] }]);
+}, 60_000);
+
+test("without a list of checkouts, the run finds the worktrees whose base pushes to the repository that was pushed to", async () => {
+  const cloned = await repository("https://gitlab.example.com/acme/billing.git");
+  const elsewhere = await repository("https://gitlab.example.com/acme/shipping.git");
+  const unconnected = await repository();
+  const host = await forgeHost({ before: [git({ cleanup: false })], after: [workflow()], forge: { pushReaction: {} } });
+  hosts.push(host);
+  await eventually(async () => (await installations(host)).length === 1, 20_000, "the push reaction was not installed");
+
+  const create = (repo: string) => host.niwa.call("git.worktree.create" as never, { repo, base: "main", description: "work" } as never) as Promise<{ id: string }>;
+  const ours = await create(cloned);
+  await create(elsewhere);
+  await create(unconnected);
+  await host.niwa.call(forgeRepoWatch, { repo: BILLING });
+  host.server.event(host.billing, { action_name: "pushed to", push_data: { ref: "main", ref_type: "branch", commit_from: sha("main-1"), commit_to: sha("main-2") } });
   await host.niwa.call(forgeRepoSync, { repo: BILLING });
 
   const finished = async () => (await host.records(["workflow.run.finished"])).map((one) => (one.data as { outcome: { result?: unknown } }).outcome.result);

@@ -379,7 +379,7 @@ export const forgeJobRun = actionRef("forge.job.run", {
 // --- The push reaction ---------------------------------------------------------------------------
 
 export const forgePushConfig = actionRef("forge.push.config", {
-  description: "The local checkouts of each watched repository, `<host>/<path>` to absolute paths, as the push reaction reads them.",
+  description: "The local checkouts the owner names for each watched repository, `<host>/<path>` to absolute paths, as the push reaction reads them.",
   input: z.strictObject({}),
   output: z.strictObject({ checkouts: z.record(z.string(), z.array(z.string())) }),
 });

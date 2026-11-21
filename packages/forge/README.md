@@ -45,7 +45,8 @@ value never reaches the journal. `fetch` may be passed to speak to a fake server
   reads the pull request between its waits, so a script that uses it lists
   `forge.pr.read` on the repository next to `forge.pr.merge`.
 - `pushReaction`: a built-in workflow that, on a push to a branch, names the
-  git worktrees made from it.
+  git worktrees made from it, found by the remote their base pushes to;
+  `checkouts` adds local clones the git module cannot verify.
 
 `./cockpit` is the plugin's page: the watched repositories, the merges the server holds for later with a button that calls
 each off, and the observed pull requests with the checks of their heads and their latest pipelines.

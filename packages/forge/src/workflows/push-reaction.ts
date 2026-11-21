@@ -3,9 +3,11 @@
 // worktrees. It lives here, as a workflow of the two, and not in the git module, so local git has no
 // hidden need of a forge.
 //
-// The owner says which local checkout is a clone of which repository (`forge({ pushReaction })`):
-// nothing in the journal ties a remote to a project yet. A push to a branch that worktrees of that
-// checkout were made from leaves them behind it; the run answers which, for a composition to act on.
+// A worktree belongs to the repository that was pushed to when the remote its base pushes to, as
+// `git.worktree.list` shows it, is that repository. The owner may also name local checkouts
+// (`forge({ pushReaction: { checkouts } })`) for clones whose remote the git module does not verify.
+// A push to a branch that such worktrees were made from leaves them behind it, unless their head is
+// already the pushed commit; the run answers which, for a composition to act on.
 
 /** What the push record holds, as much of it as the script reads. */
 interface Push {
@@ -21,6 +23,8 @@ interface Listed {
   state: "ok" | "missing" | "orphan";
   repo?: string;
   base?: string;
+  head?: string;
+  remote?: { name: string; host: string; path: string };
 }
 
 declare const call: (name: string, input: unknown, opts?: { label?: string }) => Promise<any>;
@@ -37,12 +41,18 @@ export default workflow(
     output: z.object({ ref: z.string(), behind: z.array(z.string()) }),
   },
   async ({ data }) => {
+    if (data.after === undefined) return { ref: data.ref, behind: [] };
     const { checkouts } = (await call("forge.push.config", {}, { label: "config" })) as { checkouts: Record<string, string[]> };
     const local = checkouts[`${data.repo.host}/${data.repo.path}`] ?? [];
-    if (local.length === 0 || data.after === undefined) return { ref: data.ref, behind: [] };
     const { items } = (await call("git.worktree.list", {}, { label: "worktrees" })) as { items: Listed[] };
     const behind = items
-      .filter((item) => item.state === "ok" && item.base === data.ref && item.repo !== undefined && local.includes(item.repo))
+      .filter(
+        (item) =>
+          item.state === "ok" &&
+          item.base === data.ref &&
+          item.head !== data.after &&
+          ((item.remote?.host === data.repo.host && item.remote.path === data.repo.path) || (item.repo !== undefined && local.includes(item.repo))),
+      )
       .map((item) => item.id);
     return { ref: data.ref, behind };
   },
