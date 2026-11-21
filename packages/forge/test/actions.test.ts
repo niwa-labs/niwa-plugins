@@ -97,12 +97,14 @@ test("a read is granted on the repository, a write on the pull request it change
   await expect(reader.call(forgePrRead, { repo: { ...BILLING, path: "acme/payroll" }, number: 7 })).rejects.toThrow(/grant/);
 });
 
-test("ensure opens a pull request of a branch once, and updates it after that", async () => {
+test("ensure opens a pull request of a branch once, finds it again, and updates it by its number", async () => {
   const host = await served();
   host.billing.branches.set("feature/login", sha("login-1"));
   const first = await host.niwa.call(forgePrEnsure, { repo: BILLING, branch: "feature/login", base: "main", title: "Login" });
   expect(first).toMatchObject({ created: true, head: sha("login-1") });
-  const again = await host.niwa.call(forgePrEnsure, { repo: BILLING, branch: "feature/login", base: "develop", title: "Login, again", draft: true });
+  const same = await host.niwa.call(forgePrEnsure, { repo: BILLING, branch: "feature/login", base: "main", title: "Login" });
+  expect(same).toMatchObject({ created: false, pr: { number: first.pr.number } });
+  const again = await host.niwa.call(forgePrEnsure, { repo: BILLING, number: first.pr.number, branch: "feature/login", base: "develop", title: "Login, again", draft: true });
   expect(again).toMatchObject({ created: false, pr: { number: first.pr.number } });
   expect(host.billing.mrs.get(first.pr.number)).toMatchObject({ title: "Draft: Login, again", target_branch: "develop" });
   expect(host.billing.mrs.size).toBe(1);
@@ -133,4 +135,16 @@ test("a watched repository is listed with its project id, and watching it again 
   await host.niwa.call(forgeRepoWatch, { repo: BILLING });
   expect(await host.niwa.call(forgeRepoList, {})).toEqual({ items: [{ ...BILLING, projectId: 42 }] });
   expect(await host.records(["forge.repo.watched"])).toHaveLength(1);
+});
+
+test("ensure without a number changes no open pull request: a grant on pr/new cannot rewrite pull request 7", async () => {
+  const host = await served();
+  openMr(host);
+  const creator = await host.as(["forge.pr.ensure@gitlab.example.com/acme/billing/pr/new"]);
+  await expect(creator.call(forgePrEnsure, { repo: BILLING, branch: "topic", base: "develop", title: "Hijacked" })).rejects.toThrow(/number/);
+  expect(host.billing.mrs.get(7)).toMatchObject({ title: "MR 7", target_branch: "main" });
+  expect(await creator.call(forgePrEnsure, { repo: BILLING, branch: "topic", base: "main", title: "MR 7" })).toMatchObject({ created: false, pr: { number: 7 } });
+  const owner = await host.as(["forge.pr.ensure@gitlab.example.com/acme/billing/pr/7"]);
+  expect(await owner.call(forgePrEnsure, { repo: BILLING, number: 7, branch: "topic", base: "develop", title: "Renamed" })).toMatchObject({ created: false });
+  expect(host.billing.mrs.get(7)).toMatchObject({ title: "Renamed", target_branch: "develop" });
 });

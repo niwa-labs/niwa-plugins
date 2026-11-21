@@ -415,6 +415,12 @@ export function forge(options: ForgeOptions): Plugin {
             if (open.source_branch !== input.branch) {
               throw new ForgeError("refused", `pull request ${String(open.iid)} is of the branch "${open.source_branch}", not "${input.branch}"`);
             }
+            // Without a number the call is granted on pr/new: it may find the pull request it opened, never change one.
+            if (input.number === undefined) {
+              const same = open.title === fields.title && open.target_branch === fields.target_branch && (fields.description === undefined || open.description === fields.description);
+              if (!same) throw new ForgeError("refused", `pull request ${String(open.iid)} of the branch "${input.branch}" is open: name it with number to change it`);
+              return { pr: { repo, number: open.iid }, created: false, head: open.sha };
+            }
             const mr = await client.send<GitLabMr>("PUT", projectPath(repo, `/merge_requests/${String(open.iid)}`), fields);
             return { pr: { repo, number: mr.iid }, created: false, head: mr.sha };
           }

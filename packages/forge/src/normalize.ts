@@ -16,6 +16,7 @@ import { RunState as RunStates } from "./record-types.ts";
 export interface GitLabMr {
   iid: number;
   title: string;
+  description?: string | null;
   state: string;
   source_branch: string;
   target_branch: string;
