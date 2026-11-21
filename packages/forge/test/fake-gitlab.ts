@@ -124,7 +124,10 @@ export class FakeGitLab {
   readonly fetch = async (url: string, init: { method: string; headers: Record<string, string>; body?: string }): Promise<Response> => {
     const parsed = new URL(url);
     if (!url.startsWith(this.url)) return json(502, { message: "unknown server" });
-    const path = decodeURIComponent(parsed.pathname.replace(/^\/api\/v4/, ""));
+    // The project is one segment, its path encoded: decode it alone, then the rest.
+    const raw = parsed.pathname.replace(/^\/api\/v4/, "");
+    const project = /^\/projects\/([^/]+)(.*)$/.exec(raw);
+    const path = project === null ? decodeURIComponent(raw) : `/projects/${decodeURIComponent(project[1] as string)}${decodeURIComponent(project[2] ?? "")}`;
     const query = Object.fromEntries(parsed.searchParams);
     const body = init.body === undefined ? undefined : JSON.parse(init.body);
     this.requests.push({ method: init.method, path, query, headers: init.headers, body });
@@ -222,11 +225,6 @@ export class FakeGitLab {
     return this.#ids;
   }
 
-  #find(idOrPath: string): FakeProject | undefined {
-    for (const project of this.projects.values()) if (String(project.id) === idOrPath || project.path_with_namespace === idOrPath) return project;
-    return undefined;
-  }
-
   #mrJson(project: FakeProject, mr: FakeMr): unknown {
     return {
       id: project.id * 10_000 + mr.iid,
@@ -257,10 +255,11 @@ export class FakeGitLab {
   }
 
   #route(method: string, path: string, query: Record<string, string>, body: any): { status: number; body: unknown; headers?: Record<string, string> } {
-    const at = /^\/projects\/(.+?)(\/.*)?$/.exec(path);
-    const project = at === null ? undefined : this.#find(at[1] as string);
+    const project = [...this.projects.values()]
+      .filter((one) => path === `/projects/${String(one.id)}` || path.startsWith(`/projects/${String(one.id)}/`) || path === `/projects/${one.path_with_namespace}`)
+      .at(0);
     if (project === undefined) return { status: 404, body: { message: "404 Project Not Found" } };
-    const rest = at?.[2] ?? "";
+    const rest = path.startsWith(`/projects/${String(project.id)}`) ? path.slice(`/projects/${String(project.id)}`.length) : "";
     const m = (pattern: RegExp) => pattern.exec(rest);
     const mrOf = (iid: string | undefined) => project.mrs.get(Number(iid));
     const notFound = { status: 404, body: { message: "404 Not found" } };
@@ -322,6 +321,7 @@ export class FakeGitLab {
     if ((hit = m(/^\/merge_trains\/merge_requests\/(\d+)$/))) {
       const mr = mrOf(hit[1]);
       if (mr === undefined) return notFound;
+      if (method === "GET") return mr.in_train ? { status: 200, body: { merge_request: { iid: mr.iid }, status: "idle" } } : notFound;
       if (method === "POST") {
         if (body.sha !== undefined && body.sha !== mr.sha) return { status: 409, body: { message: "SHA does not match HEAD of source branch" } };
         mr.in_train = true;
