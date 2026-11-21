@@ -24,7 +24,7 @@ import type { ActionContext, Address, JournalReader, RecordId, Seq, Step, Stored
 import { AGENT_BRIEFING, agentNotify } from "@niwa-labs/agent/records";
 import { COCKPIT_MODULE, bindingOf, plugin } from "@niwa-labs/plugin";
 import type { CallerBinding, MessagesOptions, Plugin } from "@niwa-labs/plugin";
-import { REQUEST_TYPES, RequestAnswered, RequestCancelled, RequestCreated, RequestExpired, fold as foldRequest, requestAsk, requestCancel } from "@niwa-labs/requests/records";
+import { REQUEST_TYPES, RequestCancelled, RequestCreated, RequestExpired, fold as foldRequest, requestAsk, requestCancel } from "@niwa-labs/requests/records";
 import { TimerSlept, timerSleepRequest } from "@niwa-labs/timer/records";
 import { fileURLToPath } from "node:url";
 
@@ -375,19 +375,13 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
 
     /** Whether a proposal still waits for the owner, as the journal says now: an answer to one that ended decides nothing. */
     const stillProposed = (id: CommitmentId): boolean => current().get(id)?.status === "proposed";
-    /** Whether the answer of a request is the owner's own: given by him, not found for him by a resolver. */
-    const ownersOwn = (request: string): boolean =>
-      (journal()?.since(seq(0), [RequestAnswered.name]) ?? []).some((stored) => {
-        const parsed = RequestAnswered.schema.safeParse(stored.data);
-        return parsed.success && parsed.data.id === request && parsed.data.by?.kind === "owner" && parsed.data.how === undefined;
-      });
-
     // A proposal is put to the owner. The asks wait side by side: one he leaves open holds no other.
     api.on(CommitmentProposed, { id: "commitment-confirm", concurrency: Infinity }, async (terms, step) => {
       const due = terms.due === undefined ? "" : ` by ${when(terms.due)}`;
       try {
         const asked = await step(requestAsk, {
           to: OWNER,
+          answerPolicy: "owner-only",
           question: CONFIRM_QUESTION,
           input: {
             kind: "confirm",
@@ -401,7 +395,7 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
         if (!("answer" in asked)) return;
         // The owner's confirmation is his own answer: a resolver that found one for him did not ask him.
         if (!stillProposed(terms.id)) return;
-        if (isYes(asked.answer) && ownersOwn(asked.id)) await step.emit(CommitmentMade, { ...terms, basis: { kind: "owner-confirmed", request: asked.id } });
+        if (isYes(asked.answer)) await step.emit(CommitmentMade, { ...terms, basis: { kind: "owner-confirmed", request: asked.id } });
         else await step.emit(CommitmentDeclined, { id: terms.id, request: asked.id });
       } catch (error) {
         if (!(error instanceof RequestCancelled) && !(error instanceof RequestExpired)) throw error;
@@ -417,7 +411,7 @@ export function commitments(opts: CommitmentsOptions = {}): Plugin {
       if (reader === undefined || asked === undefined) return undefined;
       const created = RequestCreated.schema.parse(asked.data);
       const ended = reader.since(asked.seq, REQUEST_TYPES.map((type) => type.name)).filter((row) => row.seq <= at && (row.data as { id?: string }).id === created.id);
-      return foldRequest([asked, ...ended]).get(created.id)?.status === "open" ? created : undefined;
+      return foldRequest([asked, ...ended], bind).get(created.id)?.status === "open" ? created : undefined;
     };
     const withdraw = async (step: Step, request: z.infer<typeof RequestCreated.schema>, by: Address) => {
       await step.outcome(requestCancel, { id: request.id, reason: "the proposed commitment was cancelled", by });

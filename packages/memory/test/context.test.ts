@@ -126,11 +126,14 @@ test("an answer that is not the owner's own lets nothing leave", async () => {
   const note = await noted(host, { text: "He is on leave in May.", about: "owner" });
   await ask(host, bob, { query: "leave" });
   const [created] = await until(host, "request.created").then((all) => all.filter((one) => one.type === "request.created"));
-  // Something other than the owner answers yes for him: a resolver that recalled an old decision.
-  await host.as(undefined, "request.resolve", { id: (created!.data as { id: string }).id, answer: { ids: [CONFIRM_YES] }, info: { how: "recalled" } });
-  const [answered] = await until(host, "memory.share.answered").then((all) => dataOf(all, "memory.share.answered"));
-  expect(answered).toMatchObject({ allowed: false, reason: "not-the-owner" });
-  expect((await ask(host, bob, { query: "leave" })).withheld).toEqual([{ note, reason: "about-the-owner", status: "refused" }]);
+  const { id } = created!.data as { id: string };
+  expect(created!.data).toMatchObject({ answerPolicy: "owner-only" });
+  expect(await host.as(undefined, "request.resolve", { id, answer: { ids: [CONFIRM_YES] } })).toEqual({ answered: false });
+  expect((await ask(host, bob, { query: "leave" })).withheld).toEqual([{ note, reason: "about-the-owner", status: "asked" }]);
+  await answer(host, id, true);
+  await until(host, "memory.share.answered");
+  expect((await ask(host, bob, { query: "leave" })).items.map(item => item.note)).toEqual([note]);
+  expect(dataOf(await host.records(), "memory.share.answered")).toMatchObject([{ allowed: true, request: id }]);
 });
 
 test("an answer read again at its position tells the memory as it stood then", async () => {

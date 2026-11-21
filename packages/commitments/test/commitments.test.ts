@@ -372,13 +372,11 @@ test("an answer a resolver found for the owner confirms nothing", async () => {
   const proposed = await w.rin.call(commitmentMake, { text: "Wire the deposit", to: "rin", party: "owner", due: START + HOUR });
   await eventually(async () => (await w.records("request.created")).length === 1);
   const id = ((await w.records("request.created"))[0]?.data as { id: string }).id;
-  await w.host.call(requestResolve, { id, answer: { ids: ["yes"] }, info: { how: "recalled" } });
-  await eventually(async () => (await w.records("commitment.declined")).length === 1);
-  expect(await w.records("commitment.made")).toHaveLength(0);
-  expect((await w.owner.call(commitmentGet, { id: proposed.id })).status).toBe("declined");
-  await w.clock.advance(HOUR + GRACE);
-  await Bun.sleep(50);
-  expect(w.told).toEqual([]);
+  expect(await w.host.call(requestResolve, { id, answer: { ids: ["yes"] }, info: { how: "recalled" } })).toEqual({ answered: false });
+  expect((await w.owner.call(commitmentGet, { id: proposed.id })).status).toBe("proposed");
+  await w.owner.call(requestAnswer, { id, answer: { ids: ["yes"] } });
+  await eventually(async () => (await w.records("commitment.made")).length === 1);
+  expect((await w.owner.call(commitmentGet, { id: proposed.id })).basis).toMatchObject({ kind: "owner-confirmed", request: id });
 });
 
 test("a message he wrote is his words, whether it was sent by him or came in as his", async () => {

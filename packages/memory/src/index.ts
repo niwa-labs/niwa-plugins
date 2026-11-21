@@ -22,7 +22,7 @@ import type { CallerBinding, Plugin } from "@niwa-labs/plugin";
 import { AGENT_BRIEFING, AGENT_PROMPT_SECTION, AgentAttached, AgentDetached, AgentTurnQueued, SessionDigestTaken, agentGet } from "@niwa-labs/agent/records";
 import type { TurnAuthor } from "@niwa-labs/agent/records";
 
-import { QuestionName, RequestAnswered, requestAsk, requestCancel, requestFind, requestGet } from "@niwa-labs/requests/records";
+import { QuestionName, requestAsk, requestCancel, requestFind, requestGet } from "@niwa-labs/requests/records";
 
 import { consolidate } from "./consolidate.ts";
 import type { ConsolidationLimits } from "./consolidate.ts";
@@ -698,15 +698,6 @@ export function memory(options: MemoryOptions = {}): Plugin {
       }),
     );
 
-    /** Whether the answer of a request is the owner's own: given by him, not found for him by a resolver. */
-    const ownersOwn = (request: string): boolean =>
-      journal()
-        .since(seq(0), [recordTypeName(RequestAnswered.name)])
-        .some((stored) => {
-          const parsed = RequestAnswered.schema.safeParse(stored.data);
-          return parsed.success && parsed.data.id === request && parsed.data.by?.kind === "owner" && parsed.data.how === undefined;
-        });
-
     // A note about the owner that is wanted is asked of him, once for each revision and address; the
     // asks wait apart, so one he leaves open holds up no other.
     api.on(ShareWanted, { id: "share-ask", concurrency: Number.POSITIVE_INFINITY }, async (wanted, step) => {
@@ -715,6 +706,7 @@ export function memory(options: MemoryOptions = {}): Plugin {
       if (note === undefined || note.status !== "live" || note.revision !== wanted.revision) return;
       const asked = await step.outcome(requestAsk, {
         to: owner,
+        answerPolicy: "owner-only",
         question: SHARE_QUESTION_NAME,
         from: agentAddress(wanted.memory),
         input: {
@@ -732,10 +724,9 @@ export function memory(options: MemoryOptions = {}): Plugin {
         return;
       }
       const { id, answer } = asked.value;
-      const his = ownersOwn(id);
       await step.emit(
         ShareAnswered,
-        { ...decided, allowed: his && isYes(answer), request: id, ...(his ? {} : { reason: "not-the-owner" as const }) },
+        { ...decided, allowed: isYes(answer), request: id },
         { key: "answered" },
       );
     });

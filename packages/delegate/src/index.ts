@@ -41,6 +41,7 @@ import {
   RequestExpiredRecord,
   RequestId,
   fold as foldRequests,
+  operatorAnswered,
   requestAsk,
   requestCancel,
   requestResolve,
@@ -248,7 +249,7 @@ export function delegate(opts: DelegateOptions): Plugin {
         .sort((a, b) => a.seq - b.seq);
     /** Where a request stands as of a position: the records about it written up to then. */
     const stateAt = (id: string, at: Seq): RequestState | undefined =>
-      foldRequests(recordsAbout(id, REQUEST_TYPES).filter((row) => row.seq <= at)).get(id as RequestId);
+      foldRequests(recordsAbout(id, REQUEST_TYPES).filter((row) => row.seq <= at), bind).get(id as RequestId);
     /**
      * The invocations of delegate-answer that passed a request on: the forwards they wrote name
      * them, and what they asked is what was passed on. Another handler's question, asked for the
@@ -318,7 +319,11 @@ export function delegate(opts: DelegateOptions): Plugin {
     const passOn = async (step: Step, created: Created, to: Address, input: Question, key: string, deadline?: number) => {
       await step.emit(RequestForwarded, { request: created.id, to }, { key });
       try {
-        const asked = await step(requestAsk, { to, question: created.question, input, from: self, ...(deadline === undefined ? {} : { deadline: timestamp(deadline) }) });
+        const asked = await step(requestAsk, {
+          to, question: created.question, input, from: self,
+          ...(to.kind === "owner" ? { answerPolicy: "owner-only" as const } : {}),
+          ...(deadline === undefined ? {} : { deadline: timestamp(deadline) }),
+        });
         return "answer" in asked ? asked : undefined;
       } catch (error) {
         if (error instanceof RequestCancelled || error instanceof RequestExpired) return { ended: error.request };
@@ -339,9 +344,27 @@ export function delegate(opts: DelegateOptions): Plugin {
     /** Where the record that ended a request is. */
     const endOf = (request: RequestId): Seq | undefined => recordsAbout(request, [RequestAnswered, RequestCancelledRecord, RequestExpiredRecord]).at(0)?.seq;
 
-    /** The answer of a request delegate passed on, as the journal holds it. */
-    const answeredRecordOf = (id: RequestId): StoredRecord | undefined =>
-      journal()?.find({ type: RequestAnswered.name, field: "id", equals: id }).at(0);
+    // The owner-only ask identifies its accepted request even when its surface binding lives in requests.
+    const ownerGrounds = (id: RequestId): string[] => {
+      const request = createdOf(id);
+      return request === undefined ? [] : [String(request.row.id)];
+    };
+
+    const judgeDecision = (created: Created, judged: { id: RequestId; answer: Answer }, judge: Address) => {
+      const birth = createdOf(judged.id);
+      if (birth === undefined) return undefined;
+      // The ordinary judge ask returns the first answer after its creation, including on replay.
+      const row = journal()?.query({ types: [RequestAnswered.name], filter: { id: judged.id }, from: birth.row.seq }, 1)[0];
+      if (row === undefined) return undefined;
+      const receipt = RequestAnswered.schema.parse(row.data);
+      if (stableJson(receipt.answer) !== stableJson(judged.answer)) return undefined;
+      const grounds = [String(row.id)];
+      if (receipt.how === undefined && receipt.by?.kind === "owner" && operatorAnswered(row, bind)) {
+        return decided(created, "owner", judged.answer, grounds, { kind: "owner" });
+      }
+      const author = bind(row.actor);
+      return decided(created, "judge", judged.answer, grounds, author !== undefined && same(author, judge) ? judge : undefined);
+    };
 
     // A request put to the agent: recalled, judged, or forwarded to the owner. Each waits for its own
     // answer, side by side with the others.
@@ -368,9 +391,9 @@ export function delegate(opts: DelegateOptions): Plugin {
             if (taken.status === "over") return;
             if (taken.status === "answered") {
               // Whoever answered the judge's question decided: the judge, or the owner in its place.
-              const answered = answeredRecordOf(judged.id);
-              const author = answered === undefined ? undefined : RequestAnswered.schema.parse(answered.data).by;
-              const decision = decided(created, author?.kind === "owner" ? "owner" : "judge", judged.answer, answered === undefined ? [] : [String(answered.id)], author);
+              const decision = judge.kind === "owner"
+                ? decided(created, "owner", judged.answer, ownerGrounds(judged.id), judge)
+                : judgeDecision(created, judged, judge);
               if (decision !== undefined) await step.emit(DecisionMade, decision, { key: "decided" });
               return;
             }
@@ -403,10 +426,7 @@ export function delegate(opts: DelegateOptions): Plugin {
             continue;
           }
           // What the owner answered is his decision in the area, whether or not the request still waited.
-          const answered = answeredRecordOf(forwarded.id);
-          const by = answered === undefined ? undefined : RequestAnswered.schema.parse(answered.data).by;
-          if (answered === undefined || by?.kind !== "owner") return;
-          const decision = decided(created, "owner", forwarded.answer, [String(answered.id)], by);
+          const decision = decided(created, "owner", forwarded.answer, ownerGrounds(forwarded.id), { kind: "owner" });
           if (decision !== undefined) await step.emit(DecisionMade, decision, { key: "decided" });
           return;
         }

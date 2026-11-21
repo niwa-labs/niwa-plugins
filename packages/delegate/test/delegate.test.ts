@@ -4,12 +4,12 @@
 
 import { afterEach, expect, test } from "bun:test";
 
-import { action, grant, principalOf, stableJson } from "@niwa-labs/core";
+import { action, grant, principalOf, record, stableJson } from "@niwa-labs/core";
 import type { Address, Caller, Question, StoredRecord } from "@niwa-labs/core";
 import { plugin } from "@niwa-labs/plugin";
 import type { Plugin } from "@niwa-labs/plugin";
-import { RequestCreated, requestAnswer, requestAsk, requestCancel, requestGet, requestResolve } from "@niwa-labs/requests/records";
-import { baseStack, connect, connectAsOwner, createNiwa, eventually, tempHome, testClock } from "@niwa-labs/testing";
+import { RequestCreated, RequestId, requestAnswer, requestAsk, requestCancel, requestGet, requestResolve } from "@niwa-labs/requests/records";
+import { baseStack, connect, connectAsOwner, createNiwa, eventually, requests, tempHome, testClock } from "@niwa-labs/testing";
 import type { NiwaApi, TestClock } from "@niwa-labs/testing";
 import { z } from "zod";
 
@@ -155,6 +155,54 @@ test("a request the owner has not decided is forwarded to him, and his answer is
   expect(answered.find((one) => one.id === second)).toMatchObject({ how: "recalled", area: "style" });
   expect(await w.to({ kind: "owner" })).toHaveLength(1);
 });
+
+for (const route of ["forward", "judge"] as const) {
+  test(`an authenticated ${route} answer reaches the original request and keeps its scope on restart`, async () => {
+    const home = await tempHome();
+    cleanups.push(() => home.cleanup());
+    const pick = record("surface.picked", z.object({ id: RequestId }));
+    const address: Address = route === "judge" ? JUDGE : { kind: "owner" };
+    const surface = plugin("surface", api => {
+      api.declare(pick);
+      api.on(pick, async ({ id }, step) => { await step(requestAnswer, { id, answer: { ids: ["tabs"] } }); });
+    });
+    const addressing = (caller: Caller) => caller.kind === "handler" && caller.handler.startsWith("surface/") ? address : bind(caller);
+    const start = async () => {
+      const host = createNiwa({ home: home.path });
+      host.use(requests({ bind: addressing }), surface, delegate({
+        agent: "rin", messages: { bind: addressing }, judges: route === "forward" ? {} : { style: JUDGE }, context: [],
+      }));
+      await host.serve();
+      return host;
+    };
+    let host = await start();
+    cleanups.push(() => host.close());
+    const input = choice("Tabs or spaces?", "style");
+    const ask = () => host.call(requestAsk, { to: RIN, question: "style.indent" as never, input, from: LEAD });
+    const original = await ask();
+    const copies = async () => (await host.records.read()).filter(row =>
+      row.type === RequestCreated.name && stableJson(RequestCreated.schema.parse(row.data).from ?? null) === stableJson(RIN));
+    await eventually(async () => (await copies()).length === 1);
+    const copy = RequestCreated.schema.parse((await copies())[0]!.data);
+    expect(copy.answerPolicy).toBe(route === "forward" ? "owner-only" : undefined);
+    await host.emit(pick, { id: copy.id });
+    await eventually(async () => (await host.records.read()).some(row => row.type === "delegate.decided"));
+    expect(await host.call(requestGet, { id: original.id })).toMatchObject({ status: "answered", answer: { ids: ["tabs"] } });
+    await host.close();
+    host = await start();
+    const second = await ask();
+    if (route === "judge") {
+      await eventually(async () => (await copies()).length === 2);
+      expect((await host.call(requestGet, { id: second.id })).status).toBe("open");
+    } else {
+      await eventually(async () => (await host.call(requestGet, { id: second.id })).status === "answered");
+      expect(await host.call(requestGet, { id: second.id })).toMatchObject({ answer: { ids: ["tabs"] } });
+      expect(await copies()).toHaveLength(1);
+    }
+    const decisions = (await host.records.read()).filter(row => row.type === "delegate.decided");
+    expect(decisions.map(row => row.data)).toMatchObject([{ kind: route === "judge" ? "judge" : "owner", by: address }]);
+  });
+}
 
 test("a decision holds in its own area, and a question without an area is never recalled", async () => {
   const w = await world();
@@ -320,6 +368,10 @@ test("a request of an area with a judge goes to the judge, with the context the 
   // The owner answered in the judge's place: the decision is his, not the judge's.
   expect((await w.records("delegate.decided"))[0]?.data).toMatchObject({ kind: "owner", area: "style", by: { kind: "owner" } });
   expect(await w.host.call(delegateRecall, { question: "style.indent" as never, input: choice("Tabs or spaces?", "style") })).toMatchObject({ found: true, answer: { ids: ["tabs"] } });
+  const next = await w.ask(choice("Tabs or spaces?", "style"));
+  await eventually(async () => (await w.status(next)) === "answered");
+  expect(await answerOf(w, next)).toEqual({ ids: ["tabs"] });
+  expect(await w.to(JUDGE)).toHaveLength(1);
 });
 
 test("a request the judge does not answer in time goes on to the owner", async () => {
