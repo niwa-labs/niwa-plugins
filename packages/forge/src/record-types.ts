@@ -225,14 +225,62 @@ export type MergeWhen = z.infer<typeof MergeWhen>;
 export const MergeMethod = z.enum(["merge", "squash", "rebase"]);
 export type MergeMethod = z.infer<typeof MergeMethod>;
 
+type MergeState = { phase: "open" | "merging" | "armed" | "cancelling" | "merged"; operation: string; basedOn?: string };
+/** GitLab keeps the project ID when the project path changes. */
+export function mergeKey(pr: PrRef): string {
+  return JSON.stringify([pr.repo.host, pr.repo.projectId, pr.number]);
+}
+
+const mergeGuard = {
+  group: "forge.merge",
+  key: (data: { pr: PrRef }) => mergeKey(data.pr),
+  initial: (): MergeState => ({ phase: "open", operation: "" }),
+};
+
+function owned(state: MergeState, operation: string, ...phases: MergeState["phase"][]) {
+  if (!phases.includes(state.phase) || state.operation !== operation) {
+    return { code: "stale-merge", reason: `the merge is ${state.phase} under operation ${state.operation}` };
+  }
+}
+
 /**
  * A merge is about to be asked of the server. Written before the request leaves, so a call that was
  * cut off can be checked: without this record the request was never sent.
  */
-export const MergeRequested = record(
-  "forge.pr.merge.requested",
+export const MergeStarted = record(
+  "forge.pr.merge.started",
   z.strictObject({ operation: z.string().min(1), pr: PrRef, expectHead: Sha, method: MergeMethod, when: MergeWhen }),
+  { guard: {
+    ...mergeGuard,
+    admit: state => state.phase === "open" ? undefined : { code: "merge-busy", reason: `the merge is ${state.phase}` },
+    fold: (_state, data): MergeState => ({ phase: "merging", operation: data.operation }),
+  } },
 );
+
+export const MergeRefused = record("forge.pr.merge.refused", z.strictObject({
+  pr: PrRef, operation: z.string().min(1), reason: z.string(), terminal: z.boolean(), failed: z.boolean(),
+}), { guard: {
+  ...mergeGuard,
+  admit: (state, data) => owned(state, data.operation, "merging"),
+  fold: (_state, data): MergeState => ({ phase: data.terminal ? "merged" : "open", operation: data.operation }),
+} });
+
+export const CancelStarted = record("forge.pr.merge.cancel.started", z.strictObject({
+  pr: PrRef, operation: z.string().min(1), basedOn: z.string().min(1), mode: z.enum(["auto-merge", "train"]),
+}), { guard: {
+  ...mergeGuard,
+  admit: (state, data) => owned(state, data.basedOn, "armed"),
+  fold: (_state, data): MergeState => ({ phase: "cancelling", operation: data.operation, basedOn: data.basedOn }),
+} });
+
+export const CancelRefused = record("forge.pr.merge.cancel.refused", z.strictObject({
+  pr: PrRef, operation: z.string().min(1), basedOn: z.string().min(1), error: z.string().optional(),
+}), { guard: {
+  ...mergeGuard,
+  admit: (state, data) => owned(state, data.operation, "cancelling") ??
+    (state.basedOn === data.basedOn ? undefined : { code: "stale-merge", reason: "a different merge was armed" }),
+  fold: (_state, data): MergeState => ({ phase: "armed", operation: data.basedOn }),
+} });
 
 /**
  * The server took a merge it will make later: an automatic merge when the pipeline succeeds, or a
@@ -241,18 +289,28 @@ export const MergeRequested = record(
 export const MergeArmed = record(
   "forge.pr.merge.armed",
   z.strictObject({
-    pr: PrRef,
+    operation: z.string().min(1), pr: PrRef,
     mode: z.enum(["auto-merge", "train"]),
     /** The server's own name for what it took: `<host>/<path>!<n>` for the merge request. */
     externalId: z.string().min(1),
     expectHead: Sha,
   }),
+  { guard: {
+    ...mergeGuard,
+    admit: (state, data) => owned(state, data.operation, "merging"),
+    fold: (_state, data): MergeState => ({ phase: "armed", operation: data.operation }),
+  } },
 );
 
 /** A merge the server had taken was called off, by `forge.pr.merge.cancel`. */
 export const MergeDisarmed = record(
   "forge.pr.merge.disarmed",
-  z.strictObject({ pr: PrRef, externalId: z.string().min(1) }),
+  z.strictObject({ cancelled: z.boolean(), operation: z.string().min(1), pr: PrRef, externalId: z.string().min(1) }),
+  { guard: {
+    ...mergeGuard,
+    admit: (state, data) => owned(state, data.operation, "armed", "cancelling"),
+    fold: (_state, data): MergeState => ({ phase: "open", operation: data.operation }),
+  } },
 );
 
 /**
@@ -262,7 +320,12 @@ export const MergeDisarmed = record(
  */
 export const MergeSettled = record(
   "forge.pr.merge.settled",
-  z.strictObject({ pr: PrRef, externalId: z.string().min(1), outcome: z.enum(["merged", "closed"]), mergeSha: Sha.optional() }),
+  z.strictObject({ operation: z.string().min(1), pr: PrRef, externalId: z.string().min(1), outcome: z.enum(["merged", "closed"]), mergeSha: Sha.optional() }),
+  { guard: {
+    ...mergeGuard,
+    admit: (state, data) => owned(state, data.operation, "armed", "merging", "cancelling"),
+    fold: (_state, data): MergeState => ({ phase: data.outcome === "merged" ? "merged" : "open", operation: data.operation }),
+  } },
 );
 
 /** Every record type of the forge module. */
@@ -280,7 +343,10 @@ export const FORGE_TYPES = [
   PipelineObserved,
   JobObserved,
   ChecksObserved,
-  MergeRequested,
+  MergeStarted,
+  MergeRefused,
+  CancelStarted,
+  CancelRefused,
   MergeArmed,
   MergeDisarmed,
   MergeSettled,

@@ -17,6 +17,7 @@ value never reaches the journal. `fetch` may be passed to speak to a fake server
 - Targets: `<host>/<path>` for reads, `<host>/<path>/pr/<n>` for pull request
   writes and merges, `<host>/<path>/ref/<ref>` for pipelines and jobs. A run
   fills a template such as `forge.pr.merge@{repo.host}/{repo.path}/pr/*`.
+- `forge.pr.merge.started` and `forge.pr.merge.cancel.started` claim a pull request before the external write. Recovery reads GitLab to settle an interrupted operation. An inconclusive response keeps the claim open.
 - `forge.pr.merge` is irreversible. A merge the server takes for later is
   listed by `forge.pr.merge.pending`, with the action that calls it off; the
   module checks it against the server whether or not the repository is watched,

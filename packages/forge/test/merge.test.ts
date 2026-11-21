@@ -3,9 +3,10 @@
 
 import { afterEach, expect, test } from "bun:test";
 
+import { createNiwa } from "@niwa-labs/testing";
 import type { OperationId } from "@niwa-labs/core";
 
-import { MergeRequested, forgePrMerge, forgePrMergeCancel, forgePrMergePending, forgePrRead } from "../src/index.ts";
+import { CancelStarted, MergeStarted, forge, secret, forgePrMerge, forgePrMergeCancel, forgePrMergePending, forgePrRead } from "../src/index.ts";
 import { sha } from "./fake-gitlab.ts";
 import { BILLING, forgeHost, openMr } from "./support.ts";
 import type { ForgeHost } from "./support.ts";
@@ -27,8 +28,8 @@ const ask = { repo: BILLING, number: 7, expectHead: head, method: "merge" } as c
 
 /** The operation of the last merge asked, as its record says. */
 async function lastOperation(host: ForgeHost): Promise<OperationId> {
-  const asked = (await host.records([MergeRequested.name])).at(-1);
-  return MergeRequested.schema.parse(asked?.data).operation as OperationId;
+  const asked = (await host.records([MergeStarted.name])).at(-1);
+  return MergeStarted.schema.parse(asked?.data).operation as OperationId;
 }
 
 /** Ask the module's own check of the merge, as the host does after a cut. */
@@ -114,7 +115,7 @@ test("a merge whose answer was lost is checked against the pull request on the s
   host.server.queue("PUT", /\/merge$/, 502, { message: "bad gateway" });
   await expect(host.niwa.call(forgePrMerge, ask)).rejects.toThrow(/502/);
   const operation = await lastOperation(host);
-  expect(await check(host, operation)).toMatchObject({ status: "failed", error: expect.stringContaining("still open") });
+  expect(await check(host, operation)).toMatchObject({ status: "unknown" });
 
   const mr = host.billing.mrs.get(7)!;
   mr.state = "merged";
@@ -184,4 +185,54 @@ test("calling off an automatic merge does not ask about a merge train, which a s
   expect(await host.niwa.call(forgePrMergeCancel, { repo: BILLING, number: 7 })).toEqual({ cancelled: true });
   expect(host.server.seen("GET", /merge_trains/)).toEqual([]);
   expect(await host.records(["forge.pr.merge.disarmed"])).toHaveLength(1);
+});
+
+test("concurrent merges and cancellations send one mutation per claim", async () => {
+  const host = await served();
+  const merge = () => host.niwa.call(forgePrMerge, { ...ask, when: "pipeline" });
+  const first = await Promise.allSettled([merge(), merge()]);
+  expect(first.filter(answer => answer.status === "fulfilled")).toHaveLength(1);
+  expect(host.server.seen("PUT", /\/merge$/)).toHaveLength(1);
+  const cancel = () => host.niwa.call(forgePrMergeCancel, { repo: BILLING, number: 7 });
+  const second = await Promise.allSettled([cancel(), cancel()]);
+  expect(second.filter(answer => answer.status === "fulfilled" && answer.value.cancelled)).toHaveLength(1);
+  expect(host.server.seen("POST", /cancel_merge_when_pipeline_succeeds$/)).toHaveLength(1);
+});
+
+test("an interrupted cancellation is recovered from GitLab without sending another mutation", async () => {
+  const host = await served();
+  await host.niwa.call(forgePrMerge, { ...ask, when: "pipeline" });
+  host.server.queue("POST", /cancel_merge_when_pipeline_succeeds$/, 502, {});
+  await expect(host.niwa.call(forgePrMergeCancel, { repo: BILLING, number: 7 })).rejects.toThrow(/502/);
+  const operation = CancelStarted.schema.parse((await host.records([CancelStarted.name]))[0]?.data).operation as OperationId;
+  const cancel = host.actions.get(forgePrMergeCancel.name)!;
+  const check = () => cancel.check!(operation, { operationId: operation, caller: { kind: "host" } });
+  expect(await check()).toEqual({ status: "unknown" });
+  host.billing.mrs.get(7)!.merge_when_pipeline_succeeds = false;
+  expect(await check()).toEqual({ status: "completed", value: { cancelled: true } });
+  expect(await check()).toEqual({ status: "completed", value: { cancelled: true } });
+  expect(host.server.seen("POST", /cancel_merge_when_pipeline_succeeds$/)).toHaveLength(1);
+  expect(await host.records(["forge.pr.merge.disarmed"])).toHaveLength(1);
+});
+
+test("reopening a host finds an interrupted merge on an unwatched repository without sending it again", async () => {
+  const host = await served();
+  host.server.queue("PUT", /\/merge$/, 502, {});
+  await expect(host.niwa.call(forgePrMerge, { ...ask, when: "pipeline" })).rejects.toThrow(/502/);
+  await host.niwa.close();
+  host.billing.mrs.get(7)!.merge_when_pipeline_succeeds = true;
+  const restarted = createNiwa({ home: host.home });
+  restarted.use(forge({
+    servers: [{ host: BILLING.host, url: host.server.url, token: secret("GITLAB_TOKEN") }],
+    fetch: host.server.fetch, env: {}, poll: { awaited: 15, background: 15, quiet: 15 },
+  }));
+  try {
+    await restarted.serve();
+    const until = Date.now() + 3000;
+    while ((await restarted.call(forgePrMergePending, {})).items.length === 0 && Date.now() < until) await Bun.sleep(15);
+    expect((await restarted.call(forgePrMergePending, {})).items).toHaveLength(1);
+    expect(host.server.seen("PUT", /\/merge$/)).toHaveLength(1);
+  } finally {
+    await restarted.close();
+  }
 });

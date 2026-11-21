@@ -19,7 +19,7 @@
 
 import { createHash } from "node:crypto";
 
-import { IntegrityError, seq } from "@niwa-labs/core";
+import { IntegrityError, RecordRefused, seq } from "@niwa-labs/core";
 import type { EmitOptions, JournalReader, RecordType, StoredRecord } from "@niwa-labs/core";
 
 import { ForgeError } from "./gitlab.ts";
@@ -199,7 +199,7 @@ export async function sync(place: SyncPlace, repo: Repo, since = 0): Promise<num
       seen.absorb(place.journal);
     } catch (error) {
       // The same id with other content: a pass that was cut off wrote this version already.
-      if (!(error instanceof IntegrityError)) throw error;
+      if (!(error instanceof IntegrityError) && !(error instanceof RecordRefused && error.code === "stale-merge")) throw error;
     }
   };
   const mrOf = async (iid: number): Promise<GitLabMr | undefined> => {

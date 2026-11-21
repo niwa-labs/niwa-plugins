@@ -21,7 +21,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { IntegrityError, action } from "@niwa-labs/core";
+import { IntegrityError, RecordRefused, action } from "@niwa-labs/core";
 import type { JournalReader } from "@niwa-labs/core";
 import { BUILTIN_WORKFLOW, COCKPIT_MODULE, SCRIPT_PACKAGE, plugin } from "@niwa-labs/plugin";
 import type { Plugin } from "@niwa-labs/plugin";
@@ -59,13 +59,14 @@ import {
 import type { RepoStatus } from "./actions.ts";
 import { ForgeError } from "./gitlab.ts";
 import type { FetchLike, GitLab } from "./gitlab.ts";
-import { cancelMerge, checkMerge, merge, pendingMerges, settleMerges } from "./merge.ts";
+import { cancelMerge, checkCancel, checkMerge, merge, pendingMerges, settleMerges, unresolvedClaims } from "./merge.ts";
+import type { CheckPlace } from "./merge.ts";
 import { checksOf, lookupsOf, pipelineOf, pullRequestOf, runStateOf } from "./normalize.ts";
 import { DEFAULT_INTERVALS, Poller, Seen, sync } from "./observe.ts";
 import type { PollIntervals } from "./observe.ts";
 import { observedPrs } from "./prs.ts";
 import type { GitLabJob, GitLabMr, GitLabPipeline } from "./normalize.ts";
-import { FORGE_TYPES, MergeArmed, MergeDisarmed, Pushed, RepoUnwatched, RepoWatched } from "./record-types.ts";
+import { FORGE_TYPES, Pushed, RepoUnwatched, RepoWatched } from "./record-types.ts";
 import type { Pipeline, Repo } from "./record-types.ts";
 import { resolveSecret } from "./secrets.ts";
 import { Servers, projectPath, repoKey, watchedRepos, watching } from "./servers.ts";
@@ -151,6 +152,23 @@ export function forge(options: ForgeOptions): Plugin {
     const gitlab = (host: string): GitLab => servers.client(host);
     const intervals: PollIntervals = options.poll === false ? DEFAULT_INTERVALS : { ...DEFAULT_INTERVALS, ...options.poll };
     const poller = new Poller(intervals);
+    const mergeCheck: CheckPlace = {
+      journal, gitlab,
+      write: async (type, data, id) => { await api.emit(type, data, { id }); },
+    };
+    const active = new Set<string>();
+    const during = async <T>(operation: string, work: () => Promise<T>): Promise<T> => {
+      active.add(operation);
+      try { return await work(); }
+      finally { active.delete(operation); }
+    };
+    const reconcile = async (repo: Repo) => {
+      for (const claim of unresolvedClaims(journal())) {
+        if (active.has(claim.operation) || claim.pr.repo.host !== repo.host || claim.pr.repo.projectId !== repo.projectId) continue;
+        const check = claim.cancel ? checkCancel : checkMerge;
+        await check(mergeCheck, claim.operation);
+      }
+    };
     /** The repository of a name; a caller that reads it is waited on, so it is polled more often. */
     const repoOf = (name: { host: string; path: string }) => {
       poller.touch(repoKey(name), Date.now());
@@ -170,7 +188,8 @@ export function forge(options: ForgeOptions): Plugin {
       let missed = false;
       const next = before
         .catch(() => 0)
-        .then(() => {
+        .then(async () => {
+          await reconcile(watched.repo);
           const now = journal();
           if (now === undefined) throw new ForgeError("not-watched", "the host is not serving");
           // A path that names another project than before (a rename, a new project under the old path) starts afresh.
@@ -204,6 +223,7 @@ export function forge(options: ForgeOptions): Plugin {
     const settle = async (key: string, repo: Repo | undefined): Promise<number> => {
       const reader = journal();
       if (repo === undefined || reader === undefined) return 0;
+      await reconcile(repo);
       let written = 0;
       await settleMerges(
         {
@@ -215,7 +235,7 @@ export function forge(options: ForgeOptions): Plugin {
               written += 1;
             } catch (error) {
               // The same id with other content: an earlier pass wrote this one already.
-              if (!(error instanceof IntegrityError)) throw error;
+              if (!(error instanceof IntegrityError) && !(error instanceof RecordRefused && error.code === "stale-merge")) throw error;
             }
           },
         },
@@ -235,7 +255,7 @@ export function forge(options: ForgeOptions): Plugin {
           const watchedNow = watching(journal());
           // A merge armed in a repository nobody watches is still settled against the server.
           const unwatched = new Map<string, Repo>();
-          for (const one of pendingMerges(journal())) {
+          for (const one of [...pendingMerges(journal()), ...unresolvedClaims(journal())]) {
             const key = repoKey(one.pr.repo);
             if (!watchedNow.has(key)) unwatched.set(key, one.pr.repo);
           }
@@ -604,33 +624,25 @@ export function forge(options: ForgeOptions): Plugin {
         destructive: true,
         async run(input, ctx) {
           const repo = await repoOf(input.repo);
-          return await merge(
+          return during(ctx.operationId, () => merge(
             gitlab(repo.host),
             { pr: { repo, number: input.number }, expectHead: input.expectHead, method: input.method, when: input.when ?? "now" },
             ctx,
-          );
+          ));
         },
-        check: (operationId) =>
-          checkMerge(
-            {
-              journal,
-              gitlab,
-              emit: (data, id) => api.emit(MergeArmed, data, { id }),
-            },
-            operationId,
-          ),
+        check: operation => checkMerge(mergeCheck, operation),
       }),
     );
 
     api.action(
       action(forgePrMergeCancel, {
-        recovery: "repeat",
+        recovery: "do-not-repeat",
         effect: "write",
         world: "external",
-        idempotent: true,
+        check: operation => checkCancel(mergeCheck, operation),
         async run(input, ctx) {
           const repo = await repoOf(input.repo);
-          const cancelled = await cancelMerge(gitlab(repo.host), { repo, number: input.number }, journal(), (data) => ctx.emit(MergeDisarmed, data));
+          const cancelled = await during(ctx.operationId, () => cancelMerge(gitlab(repo.host), { repo, number: input.number }, journal(), ctx));
           return { cancelled };
         },
       }),
