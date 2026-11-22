@@ -21,16 +21,16 @@ const merge = (subject: string, at: number): Attestation => ({
 
 test("a claim reads as a sentence with short commit ids", () => {
   expect(shortSha(A)).toBe("aaaaaaaa");
-  expect(claimText(merge("pr", 1).claim)).toBe("Pipeline 12 is green as a merge result: aaaaaaaa into bbbbbbbb");
-  expect(claimText({ kind: "ci", at: "head", sha: A, pipeline: 3 })).toBe("Pipeline 3 of aaaaaaaa is green");
-  expect(claimText({ kind: "verdict", name: "gates", outcome: "fail", sha: A })).toBe("gates failed on aaaaaaaa");
-  expect(claimText({ kind: "ci", at: "merge-result", sourceSha: A, targetSha: B, mergeSha: C, pipeline: 4, pipelineKind: "train" })).toContain("merge train");
+  expect(claimText(merge("pr", 1).claim)).toBe("Пайплайн №12 прошёл · результат слияния aaaaaaaa → bbbbbbbb");
+  expect(claimText({ kind: "ci", at: "head", sha: A, pipeline: 3 })).toBe("Пайплайн №3 успешно проверил коммит aaaaaaaa");
+  expect(claimText({ kind: "verdict", name: "gates", outcome: "fail", sha: A })).toBe("gates · проверка не пройдена · aaaaaaaa");
+  expect(claimText({ kind: "ci", at: "merge-result", sourceSha: A, targetSha: B, mergeSha: C, pipeline: 4, pipelineKind: "train" })).toContain("очередь слияния");
 });
 
 test("an author is named by its kind and what it names", () => {
-  expect(who(OWNER)).toBe("owner");
-  expect(who({ kind: "client", id: "session:reviewer" })).toBe("client session:reviewer");
-  expect(who({ kind: "session", harness: "claude", id: "abc" })).toBe("session claude/abc");
+  expect(who(OWNER)).toBe("владелец");
+  expect(who({ kind: "client", id: "session:reviewer" })).toBe("клиент session:reviewer");
+  expect(who({ kind: "session", harness: "claude", id: "abc" })).toBe("сессия claude/abc");
 });
 
 test("subjects are listed by their latest attestation, and each subject's latest first", () => {
@@ -65,12 +65,12 @@ test("every requirement the page builds is one the host takes", () => {
 });
 
 test("the form refuses what the host would refuse, and says what is wrong", () => {
-  expect(requirementFromForm(EMPTY_FORM)).toEqual({ problem: "Name the subject, such as gitlab.example.com/acme/billing/pr/7." });
-  expect(requirementFromForm({ ...EMPTY_FORM, subject: "pr", sha: "abc123" })).toEqual({ problem: "The source commit must be a full commit id." });
-  expect(requirementFromForm({ ...EMPTY_FORM, kind: "head", subject: "pr", sha: "abc123" })).toEqual({ problem: "The commit must be a full commit id." });
-  expect(requirementFromForm({ ...EMPTY_FORM, subject: "pr", sha: A, targetSha: "nope" })).toEqual({ problem: "The target commit must be a full commit id." });
-  expect(requirementFromForm({ ...EMPTY_FORM, kind: "verdict", subject: "pr", sha: A })).toEqual({ problem: "Name the check, such as gates." });
-  expect(requirementFromForm({ ...EMPTY_FORM, subject: "x".repeat(513), sha: A, targetSha: B })).toEqual({ problem: "A subject is at most 512 characters." });
+  expect(requirementFromForm(EMPTY_FORM)).toEqual({ problem: "Укажите объект, например gitlab.example.com/acme/billing/pr/7." });
+  expect(requirementFromForm({ ...EMPTY_FORM, subject: "pr", sha: "abc123" })).toEqual({ problem: "Укажите полный хеш исходного коммита." });
+  expect(requirementFromForm({ ...EMPTY_FORM, kind: "head", subject: "pr", sha: "abc123" })).toEqual({ problem: "Укажите полный хеш коммита." });
+  expect(requirementFromForm({ ...EMPTY_FORM, subject: "pr", sha: A, targetSha: "nope" })).toEqual({ problem: "Укажите полный хеш целевого коммита." });
+  expect(requirementFromForm({ ...EMPTY_FORM, kind: "verdict", subject: "pr", sha: A })).toEqual({ problem: "Укажите название проверки, например gates." });
+  expect(requirementFromForm({ ...EMPTY_FORM, subject: "x".repeat(513), sha: A, targetSha: B })).toEqual({ problem: "Длина объекта проверки не должна превышать 512 символов." });
 });
 
 test("the form trims what is typed and reads commit ids in lower case", () => {

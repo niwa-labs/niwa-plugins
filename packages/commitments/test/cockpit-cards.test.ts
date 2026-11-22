@@ -5,10 +5,21 @@ import { expect, test } from "bun:test";
 import { createViewer } from "@niwa-labs/cockpit-sdk";
 
 import { CommitmentStatus } from "../src/cockpit/actions.ts";
-import { RING, canCancel, cancellable } from "../src/cockpit/cards.ts";
+import { RING, canCancel, cancellable, commitmentsByStatus } from "../src/cockpit/cards.ts";
 
 test("a commitment can be cancelled until it ends", () => {
   expect(CommitmentStatus.options.filter(cancellable)).toEqual(["proposed", "open", "due"]);
+});
+
+test("open commitments show nearest deadlines first and completed ones stay in the history", () => {
+  const { open, history } = commitmentsByStatus([
+    { id: "no deadline", status: "open" },
+    { id: "already kept", status: "kept", due: 2 },
+    { id: "later", status: "proposed", due: 30 },
+    { id: "now", status: "due", due: 10 },
+  ] as const);
+  expect(open.map(({ id }) => id)).toEqual(["now", "later", "no deadline"]);
+  expect(history.map(({ id }) => id)).toEqual(["already kept"]);
 });
 
 test("every status has a ring, and an ended one is not drawn as still going", () => {

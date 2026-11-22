@@ -41,11 +41,11 @@ test("a subject is a run or a session with its harness", () => {
 
 test("a moment is told as how long ago it was", () => {
   const now = 10_000_000;
-  expect(agoText(now + 5_000, now)).toBe("just now");
-  expect(agoText(now - 30_000, now)).toBe("30 s ago");
-  expect(agoText(now - 10 * 60_000, now)).toBe("10 min ago");
-  expect(agoText(now - 3 * 3_600_000, now)).toBe("3 h ago");
-  expect(agoText(now - 5 * 86_400_000, now)).toBe("5 d ago");
+  expect(agoText(now + 5_000, now)).toBe("только что");
+  expect(agoText(now - 30_000, now)).toBe("30 с назад");
+  expect(agoText(now - 10 * 60_000, now)).toBe("10 мин назад");
+  expect(agoText(now - 3 * 3_600_000, now)).toBe("3 ч назад");
+  expect(agoText(now - 5 * 86_400_000, now)).toBe("5 дн назад");
 });
 
 const stuck = (subject: string, kind: string, since: number, last = since - 1) => ({ type: "watch.stuck", at: since + 1, data: { subject, kind, since, last } });
@@ -82,7 +82,7 @@ test("the list is read again after a record that moves a session or a run betwee
 test("a merge claim and a refused write identify the affected entity in the watch", () => {
   expect(decisionText({ type: "forge.pr.merge.started", data: {
     operation: "op1", pr: { repo: { host: "git.example", path: "work/project" }, number: 2 },
-  } })).toBe("Merge requested · git.example/work/project!2");
+  } })).toBe("Запрошено слияние · git.example/work/project!2");
   expect(decisionText({ type: "niwa.record.refused", actor: { kind: "client", id: "planner" }, data: {
     recordType: "plan.revised", entity: "work", reason: "revision changed",
   } })).toBe("planner · plan.revised · work · revision changed");

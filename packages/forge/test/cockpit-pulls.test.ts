@@ -32,9 +32,9 @@ test("a renamed project keeps its pull requests apart from another project's of 
 
 test("a pipeline is told by its number, what it ran on, and for a merge result the pair of commits", () => {
   const head: PrPipeline = { pipeline: 5, kind: "head", state: "running", sourceSha: A };
-  expect(pipelineText(head)).toBe("#5 head aaaaaaaa");
-  expect(pipelineText({ pipeline: 6, kind: "merge-result", state: "success", sourceSha: A, targetSha: B, mergeSha: A })).toBe("#6 merge result aaaaaaaa into bbbbbbbb");
-  expect(pipelineText({ pipeline: 7, kind: "train", state: "success", sourceSha: A, targetSha: B })).toBe("#7 merge train aaaaaaaa into bbbbbbbb");
+  expect(pipelineText(head)).toBe("#5 коммит aaaaaaaa");
+  expect(pipelineText({ pipeline: 6, kind: "merge-result", state: "success", sourceSha: A, targetSha: B, mergeSha: A })).toBe("#6 результат слияния aaaaaaaa → bbbbbbbb");
+  expect(pipelineText({ pipeline: 7, kind: "train", state: "success", sourceSha: A, targetSha: B })).toBe("#7 очередь слияния aaaaaaaa → bbbbbbbb");
 });
 
 test("pull requests are grouped by project and keep the order they came in", () => {

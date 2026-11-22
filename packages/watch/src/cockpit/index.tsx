@@ -9,7 +9,8 @@ export default definePlugin({
   setup(ctx) {
     ctx.pages.add({
       path: "/watch",
-      title: "Watch",
+      title: "Наблюдение",
+      commandHeading: true,
       nav: { order: 50 },
       commands: [{ action: "watch.get", label: "Проверить объект" }],
       component: WatchPage,

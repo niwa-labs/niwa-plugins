@@ -1,52 +1,67 @@
 /** The commitments of the host, one card each: what was promised, by when, where it stands, and a cancel. */
 
 import { useAction, useCall, useViewer } from "@niwa-labs/cockpit-sdk";
-import { Badge, Button, StateRing } from "@niwa-labs/ui-kit";
+import { Button, CopyValue, StateRing } from "@niwa-labs/ui-kit";
 
 import { cancelAction, listAction, type CommitmentItem } from "./actions.ts";
-import { RING, canCancel } from "./cards.ts";
+import { RING, STATUS_LABEL, canCancel, commitmentsByStatus } from "./cards.ts";
 
 function CommitmentCard({ commitment }: { commitment: CommitmentItem }) {
   const cancel = useAction(cancelAction);
   const viewer = useViewer();
   return (
-    <li data-slot="commitment-card" data-status={commitment.status} className="flex min-w-0 items-center gap-3 rounded-lg border bg-card px-3 py-2 text-card-foreground">
-      <StateRing state={RING[commitment.status]} label={commitment.status} />
-      <div className="flex min-w-0 flex-col">
-        <span className="truncate text-sm font-medium">{commitment.description}</span>
-        <span className="text-xs text-muted-foreground">
-          {commitment.id} · by {commitment.by.kind}{commitment.by.harness ? ` ${commitment.by.harness}/` : " "}{commitment.by.id} · to {commitment.to}
-          {commitment.due === undefined ? "" : ` · due ${new Date(commitment.due).toLocaleString()}`}
-        </span>
+    <li data-slot="commitment-card" data-status={commitment.status} className="min-w-0" style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)", alignItems: "start", gap: "0.3rem 0.75rem", paddingBlock: "0.6rem" }}>
+      <StateRing state={RING[commitment.status]} label={STATUS_LABEL[commitment.status]} />
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="break-words text-sm font-medium">{commitment.description}</p>
+          <p className="desk-tools mt-1 text-xs text-muted-foreground">
+            <span>{STATUS_LABEL[commitment.status]}</span>
+            <span>Получатель {commitment.to}</span>
+            {commitment.due === undefined ? <span>Без срока</span> : <time dateTime={new Date(commitment.due).toISOString()}>До {new Date(commitment.due).toLocaleString("ru")}</time>}
+            {commitment.party === "owner" ? <span>От имени владельца</span> : null}
+          </p>
+        </div>
+        {canCancel(commitment, viewer) ? (
+          <Button variant="outline" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate({ id: commitment.id })}>
+            Отменить
+          </Button>
+        ) : null}
       </div>
-      {commitment.party === "owner" ? <Badge variant="secondary">for you</Badge> : null}
-      {canCancel(commitment, viewer) ? (
-        <Button className="ml-auto" variant="outline" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate({ id: commitment.id })}>
-          Cancel
-        </Button>
-      ) : null}
-      {cancel.isError ? <span role="alert" className="text-xs text-destructive">{cancel.error.message}</span> : null}
+      <div className="desk-tools min-w-0 text-xs text-muted-foreground" style={{ gridColumn: 2 }}>
+        <span>Автор {commitment.by.kind === "owner" ? "владелец" : [commitment.by.harness, commitment.by.id].filter(Boolean).join("/") || commitment.by.kind}</span>
+        <CopyValue value={commitment.id} />
+        {cancel.isError ? <span role="alert" className="text-destructive">{cancel.error.message}</span> : null}
+      </div>
     </li>
   );
 }
 
 export function CommitmentsPage() {
   const commitments = useCall(listAction, {}, { refreshOn: { types: ["commitment.*"] } });
+  const { open, history } = commitmentsByStatus(commitments.data?.items ?? []);
+  const list = (items: CommitmentItem[]) => (
+    <ul data-slot="commitments" className="divide-y rounded-lg border bg-card px-3">
+      {items.map((commitment) => <CommitmentCard key={commitment.id} commitment={commitment} />)}
+    </ul>
+  );
   return (
-    <div className="flex min-w-0 flex-col gap-3 p-4">
-      <h2 className="text-lg font-semibold">Commitments</h2>
+    <div className="desk-page">
       {commitments.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading commitments…</p>
+        <p className="text-sm text-muted-foreground">Загружаем обязательства…</p>
       ) : commitments.isError ? (
-        <p role="alert" className="text-sm text-destructive">The commitments could not be read: {commitments.error.message}</p>
-      ) : commitments.data.items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No commitments yet.</p>
+        <p role="alert" className="text-sm text-destructive">Не удалось загрузить обязательства. {commitments.error.message}</p>
       ) : (
-        <ul data-slot="commitments" className="flex flex-col gap-2">
-          {commitments.data.items.map((commitment) => (
-            <CommitmentCard key={commitment.id} commitment={commitment} />
-          ))}
-        </ul>
+        <>
+          <section className="flex min-w-0 flex-col gap-2">
+            <h3 className="text-sm font-semibold">Открытые обязательства</h3>
+            {open.length ? list(open) : <p className="text-sm text-muted-foreground">Открытых обязательств нет.</p>}
+          </section>
+          {history.length ? <details className="flex min-w-0 flex-col gap-2">
+            <summary className="cursor-pointer text-sm font-medium">Завершённые обязательства ({history.length})</summary>
+            {list(history)}
+          </details> : null}
+        </>
       )}
     </div>
   );

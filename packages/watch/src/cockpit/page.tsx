@@ -1,11 +1,11 @@
 /** What every session and run is doing, which of them the watch flagged, and how the flags came and went. */
 
 import { EntityLink, recordList, useCall, useProjection } from "@niwa-labs/cockpit-sdk";
-import { Badge, StateRing } from "@niwa-labs/ui-kit";
+import { CopyValue, StateRing } from "@niwa-labs/ui-kit";
 
 import { decisionText, decisionTypes } from "./decisions.ts";
 import { listAction, type Reading } from "./actions.ts";
-import { KIND_LABEL, REFRESH_ON, RING, STATE_LABEL, agoText, countByState, incidents, ordered, subjectName, subjectText, troubled, type Incident } from "./subjects.ts";
+import { KIND_LABEL, REFRESH_ON, RING, STATE_LABEL, agoText, incidents, ordered, subjectName, troubled, type Incident } from "./subjects.ts";
 
 /** The flags the live feed holds: recent ones, not the whole history. */
 const FLAGS = recordList({ types: ["watch.stuck", "watch.recovered"] }, 200);
@@ -15,23 +15,26 @@ const DECISIONS = recordList({ types: decisionTypes }, 200);
 function SubjectLink({ subject }: { subject: string }) {
   const name = subjectName(subject);
   return (
-    <span className="flex min-w-0 items-center gap-2">
-      <span className="truncate text-sm font-medium">{subjectText(subject)}</span>
-      {name.kind === "run" ? <EntityLink entity={{ kind: "run", id: name.id }} short /> : null}
+    <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium">
+      {name.kind === "run" ? <>Запуск <EntityLink entity={{ kind: "run", id: name.id }} short /></> :
+        <>Сессия {name.harness} <CopyValue value={name.id} /></>}
     </span>
   );
 }
 
 function SubjectRow({ reading, now }: { reading: Reading; now: number }) {
   return (
-    <li data-slot="subject-row" data-state={reading.state} className="flex min-w-0 items-center gap-3 py-2">
+    <li data-slot="subject-row" data-state={reading.state} className="min-w-0" style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)", alignItems: "start", columnGap: "0.75rem", paddingBlock: "0.6rem" }}>
       <StateRing state={RING[reading.state]} label={STATE_LABEL[reading.state]} />
-      <SubjectLink subject={reading.subject} />
-      <Badge variant={troubled(reading.state) ? "destructive" : "secondary"}>{STATE_LABEL[reading.state]}</Badge>
-      {reading.kind === undefined ? null : <span className="text-xs text-muted-foreground">{KIND_LABEL[reading.kind]}</span>}
-      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-        since {agoText(reading.since, now)} · last sign {agoText(reading.last, now)}
-      </span>
+      <div className="flex min-w-0 flex-col gap-1">
+        <SubjectLink subject={reading.subject} />
+        <p className="desk-tools text-xs text-muted-foreground">
+          <span className={troubled(reading.state) ? "font-medium text-destructive" : "font-medium text-foreground"}>{STATE_LABEL[reading.state]}</span>
+          {reading.kind === undefined ? null : <span>{KIND_LABEL[reading.kind]}</span>}
+          <span>Состояние отмечено {agoText(reading.since, now)}</span>
+          <span>Последняя активность {agoText(reading.last, now)}</span>
+        </p>
+      </div>
     </li>
   );
 }
@@ -39,14 +42,16 @@ function SubjectRow({ reading, now }: { reading: Reading; now: number }) {
 function IncidentRow({ incident, now }: { incident: Incident; now: number }) {
   const recovered = incident.recoveredAt !== undefined;
   return (
-    <li data-slot="incident-row" data-recovered={recovered} className="flex min-w-0 items-center gap-3 py-2">
-      <StateRing state={recovered ? "done" : "failed"} label={recovered ? "Recovered" : "Stuck"} />
-      <SubjectLink subject={incident.subject} />
-      <span className="text-xs text-muted-foreground">{KIND_LABEL[incident.kind]}</span>
-      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-        flagged {agoText(incident.since, now)}
-        {incident.recoveredAt === undefined ? "" : ` · recovered ${agoText(incident.recoveredAt, now)}`}
-      </span>
+    <li data-slot="incident-row" data-recovered={recovered} className="min-w-0" style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)", alignItems: "start", columnGap: "0.75rem", paddingBlock: "0.6rem" }}>
+      <StateRing state={recovered ? "done" : "failed"} label={recovered ? "Восстановилось" : "Застряло"} />
+      <div className="flex min-w-0 flex-col gap-1">
+        <SubjectLink subject={incident.subject} />
+        <p className="desk-tools text-xs text-muted-foreground">
+          <span>{KIND_LABEL[incident.kind]}</span>
+          <span>Замечено {agoText(incident.since, now)}</span>
+          {incident.recoveredAt === undefined ? null : <span>Восстановилось {agoText(incident.recoveredAt, now)}</span>}
+        </p>
+      </div>
     </li>
   );
 }
@@ -59,41 +64,45 @@ export function WatchPage() {
     return text ? [{ id: row.id, at: row.at, text }] : [];
   });
   const now = Date.now();
+  const rows = ordered(subjects.data?.subjects ?? []);
+  const needsAttention = (one: Reading) => troubled(one.state) || one.state === "waiting-human";
+  const urgent = rows.filter(needsAttention);
+  const rest = rows.filter((one) => !needsAttention(one));
+  const list = (items: Reading[]) => (
+    <ul data-slot="subjects" className="divide-y rounded-lg border bg-card px-3">
+      {items.map((reading) => <SubjectRow key={reading.subject} reading={reading} now={now} />)}
+    </ul>
+  );
   return (
-    <div className="flex min-w-0 flex-col gap-4 p-4">
-      <h2 className="text-lg font-semibold">Watch</h2>
+    <div className="desk-page">
       {subjects.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading the subjects…</p>
+        <p className="text-sm text-muted-foreground">Загружаем сессии и запуски…</p>
       ) : subjects.isError ? (
-        <p role="alert" className="text-sm text-destructive">The subjects could not be read: {subjects.error.message}</p>
-      ) : subjects.data.subjects.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Nothing is being watched yet.</p>
+        <p role="alert" className="text-sm text-destructive">Не удалось загрузить наблюдения. {subjects.error.message}</p>
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Хост ещё не наблюдает ни одной сессии или запуска.</p>
       ) : (
         <>
-          <div data-slot="watch-counts" className="flex flex-wrap gap-2">
-            {countByState(subjects.data.subjects).map(({ state, count }) => (
-              <Badge key={state} variant={troubled(state) ? "destructive" : "outline"}>
-                {STATE_LABEL[state]} {count}
-              </Badge>
-            ))}
-          </div>
-          <ul data-slot="subjects" className="divide-y rounded-lg border bg-card px-3 text-card-foreground">
-            {ordered(subjects.data.subjects).map((reading) => (
-              <SubjectRow key={reading.subject} reading={reading} now={now} />
-            ))}
-          </ul>
+          <section className="flex min-w-0 flex-col gap-2">
+            <h3 className="text-sm font-semibold">Требуют внимания</h3>
+            {urgent.length ? list(urgent) : <p className="text-sm text-muted-foreground">Ничего не застряло и не ждёт ответа.</p>}
+          </section>
+          {rest.length ? <section className="flex min-w-0 flex-col gap-2">
+            <h3 className="text-sm font-semibold">Остальные сессии и запуски</h3>
+            {list(rest)}
+          </section> : null}
         </>
       )}
       {decisions.length > 0 && <section>
-        <h3 className="text-sm font-semibold text-muted-foreground">Recent merge activity and refused writes</h3>
+        <h3 className="text-sm font-semibold">Недавние слияния и отказы записи</h3>
         <ul className="divide-y rounded-lg border px-3">
           {decisions.slice().reverse().map(row => <li key={row.id} className="py-2 text-sm">{row.text} · {agoText(row.at, now)}</li>)}
         </ul>
       </section>}
       <section className="flex min-w-0 flex-col gap-2">
-        <h3 className="text-sm font-semibold text-muted-foreground">Recently stuck and recovered</h3>
+        <h3 className="text-sm font-semibold">История сбоев</h3>
         {flags.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nothing was flagged since this page was opened or in the recent records.</p>
+          <p className="text-sm text-muted-foreground">В недавних записях сбоев нет.</p>
         ) : (
           <ul data-slot="incidents" className="divide-y rounded-lg border bg-card px-3 text-card-foreground">
             {flags.map((incident) => (

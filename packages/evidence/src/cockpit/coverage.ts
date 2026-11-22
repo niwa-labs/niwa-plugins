@@ -9,25 +9,27 @@ export function shortSha(sha: string): string {
 
 /** What a claim says, in a sentence. */
 export function claimText(claim: Claim): string {
-  if (claim.kind === "verdict") return `${claim.name} ${claim.outcome === "pass" ? "passed" : "failed"} on ${shortSha(claim.sha)}`;
-  if (claim.at === "head") return `Pipeline ${String(claim.pipeline)} of ${shortSha(claim.sha)} is green`;
-  const how = claim.pipelineKind === "train" ? "merge train" : "merge result";
-  return `Pipeline ${String(claim.pipeline)} is green as a ${how}: ${shortSha(claim.sourceSha)} into ${shortSha(claim.targetSha)}`;
+  if (claim.kind === "verdict") return `${claim.name} · ${claim.outcome === "pass" ? "проверка пройдена" : "проверка не пройдена"} · ${shortSha(claim.sha)}`;
+  if (claim.at === "head") return `Пайплайн №${String(claim.pipeline)} успешно проверил коммит ${shortSha(claim.sha)}`;
+  const how = claim.pipelineKind === "train" ? "очередь слияния" : "результат слияния";
+  return `Пайплайн №${String(claim.pipeline)} прошёл · ${how} ${shortSha(claim.sourceSha)} → ${shortSha(claim.targetSha)}`;
 }
 
 /** An address as the page names it. */
 export function who(address: Address): string {
-  if (address.harness !== undefined && address.id !== undefined) return `${address.kind} ${address.harness}/${address.id}`;
-  return address.id === undefined ? address.kind : `${address.kind} ${address.id}`;
+  const kinds: Readonly<Record<string, string>> = { owner: "владелец", client: "клиент", session: "сессия", host: "хост", handler: "обработчик", agent: "агент" };
+  const kind = kinds[address.kind] ?? address.kind;
+  if (address.harness !== undefined && address.id !== undefined) return `${kind} ${address.harness}/${address.id}`;
+  return address.id === undefined ? kind : `${kind} ${address.id}`;
 }
 
 /** What it means that a requirement is not covered. */
 export const UNCOVERED_TEXT: Readonly<Record<Uncovered, string>> = {
-  none: "Nothing attests it.",
-  "target-moved": "A merge result was attested, but on another target commit: the target branch moved since.",
-  "not-merge-result": "Only an ordinary pipeline of the head ran, not a merge result.",
-  failed: "The latest verdict failed.",
-  "excluded-author": "Every passing verdict is by an author the requirement excludes.",
+  none: "Подходящих свидетельств нет.",
+  "target-moved": "Свидетельство относится к другому целевому коммиту.",
+  "not-merge-result": "Есть проверка исходного коммита. Для требования нужен результат слияния.",
+  failed: "Последняя проверка не пройдена.",
+  "excluded-author": "Требование исключает авторов всех успешных проверок.",
 };
 
 /** The requirement an attestation stands for: what it would cover if nothing else were said about its subject. */
@@ -73,17 +75,17 @@ const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 /** The requirement the form describes, or what is wrong with it. */
 export function requirementFromForm(form: RequirementForm): { requirement: Requirement } | { problem: string } {
   const subject = form.subject.trim();
-  if (subject === "") return { problem: "Name the subject, such as gitlab.example.com/acme/billing/pr/7." };
-  if (subject.length > 512) return { problem: "A subject is at most 512 characters." };
+  if (subject === "") return { problem: "Укажите объект, например gitlab.example.com/acme/billing/pr/7." };
+  if (subject.length > 512) return { problem: "Длина объекта проверки не должна превышать 512 символов." };
   const sha = form.sha.trim().toLowerCase();
-  const sourceName = form.kind === "merge-result" ? "source commit" : "commit";
-  if (!SHA.test(sha)) return { problem: `The ${sourceName} must be a full commit id.` };
+  const sourceName = form.kind === "merge-result" ? "исходного коммита" : "коммита";
+  if (!SHA.test(sha)) return { problem: `Укажите полный хеш ${sourceName}.` };
   if (form.kind === "head") return { requirement: { kind: "ci", at: "head", subject, sha } };
   if (form.kind === "verdict") {
     const name = form.name.trim();
-    return name === "" ? { problem: "Name the check, such as gates." } : { requirement: { kind: "verdict", subject, name, sha } };
+    return name === "" ? { problem: "Укажите название проверки, например gates." } : { requirement: { kind: "verdict", subject, name, sha } };
   }
   const targetSha = form.targetSha.trim().toLowerCase();
-  if (!SHA.test(targetSha)) return { problem: "The target commit must be a full commit id." };
+  if (!SHA.test(targetSha)) return { problem: "Укажите полный хеш целевого коммита." };
   return { requirement: { kind: "ci", at: "merge-result", subject, sourceSha: sha, targetSha } };
 }

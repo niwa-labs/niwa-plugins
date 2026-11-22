@@ -17,9 +17,9 @@ export function topParts(notes: readonly Note[]): TopPart[] {
   const lifted = notes.filter((note) => note.top).sort((a, b) => b.written - a.written);
   const projects = [...new Set(lifted.filter((note) => note.about === "work" && note.project !== undefined).map((note) => note.project!))].sort();
   const parts: TopPart[] = [
-    { heading: "About the owner", notes: lifted.filter((note) => note.about === "owner") },
-    ...projects.map((project) => ({ heading: `For ${project}`, notes: lifted.filter((note) => note.about === "work" && note.project === project) })),
-    { heading: "In general", notes: lifted.filter((note) => note.about === "work" && note.project === undefined) },
+    { heading: "О владельце", notes: lifted.filter((note) => note.about === "owner") },
+    ...projects.map((project) => ({ heading: `Проект ${project}`, notes: lifted.filter((note) => note.about === "work" && note.project === project) })),
+    { heading: "Общее", notes: lifted.filter((note) => note.about === "work" && note.project === undefined) },
   ];
   return parts.filter((part) => part.notes.length > 0);
 }
@@ -33,20 +33,20 @@ export function newestFirst(notes: readonly Note[]): Note[] {
 export function sourceText(source: NoteSource): string {
   switch (source.kind) {
     case "owner":
-      return "the owner's word";
+      return "слова владельца";
     case "inferred":
-      return "the writer's conclusion";
+      return "вывод автора";
     case "session":
-      return `session ${source.session}`;
+      return `сессия ${source.session}`;
     case "record":
-      return `record ${source.record}`;
+      return `запись ${source.record}`;
   }
 }
 
-/** How much a note stands on: confirmed by the owner, or by how many sources. */
+/** How much a note stands on: подтверждено владельцем, or by how many sources. */
 export function standingText(note: Pick<Note, "confirmed" | "sources">): string {
-  if (note.confirmed) return "confirmed by the owner";
-  return note.sources === 1 ? "one source" : `${String(note.sources)} sources`;
+  if (note.confirmed) return "подтверждено владельцем";
+  return note.sources === 1 ? "один источник" : `источников: ${String(note.sources)}`;
 }
 
 /** The memory the page shows: the one asked for when it is one of the agents', else the first. */

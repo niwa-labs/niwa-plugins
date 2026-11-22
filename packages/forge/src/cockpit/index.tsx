@@ -9,7 +9,8 @@ export default definePlugin({
   setup(ctx) {
     ctx.pages.add({
       path: "/forge",
-      title: "Forge",
+      title: "Запросы на слияние",
+      commandHeading: true,
       nav: { order: 60 },
       commands: [{ action: "forge.repo.watch", label: "Подключить репозиторий" }],
       component: ForgePage,

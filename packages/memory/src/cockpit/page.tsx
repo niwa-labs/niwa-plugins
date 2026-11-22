@@ -1,7 +1,7 @@
 /** The memory of an agent: what is shown first, every note it holds, its pages, and the questions waiting for the owner. */
 
 import { EntityLink, PageLink, pathFor, useCall, type PageProps } from "@niwa-labs/cockpit-sdk";
-import { Badge, Markdown } from "@niwa-labs/ui-kit";
+import { CopyValue, DataValue, Markdown } from "@niwa-labs/ui-kit";
 
 import { MAX_NOTES, agentListAction, noteGetAction, noteListAction, openAction, pageGetAction, pageListAction, type Note, type PageSummary } from "./actions.ts";
 import { memoryChoice, newestFirst, shareQuestions, shownText, sourceText, standingText, topParts, type ShareQuestion } from "./notes.ts";
@@ -15,7 +15,7 @@ function memoryPath(memory: string, page?: string): string {
 }
 
 function Failed({ what, message }: { what: string; message: string }) {
-  return <p role="alert" className="text-sm text-destructive">The {what} could not be read: {message}</p>;
+  return <p role="alert" className="text-sm text-destructive">Не удалось загрузить {what}. {message}</p>;
 }
 
 function NoteRow({ note }: { note: Note }) {
@@ -23,12 +23,14 @@ function NoteRow({ note }: { note: Note }) {
     <li data-slot="note-row" data-about={note.about} data-top={note.top} className="flex min-w-0 flex-col gap-1 py-2">
       <span className="text-sm">{note.text}</span>
       <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <Badge variant={note.about === "owner" ? "secondary" : "outline"}>{note.about === "owner" ? "About the owner" : "About the work"}</Badge>
-        {note.project === undefined ? null : <span className="font-mono">{note.project}</span>}
+        <span>{note.about === "owner" ? "О владельце" : "О работе"}</span>
+        {note.project === undefined ? null : <DataValue value={note.project} />}
         <span>{standingText(note)}</span>
-        <span>from {sourceText(note.source)}</span>
-        {note.top ? <Badge variant="default">{note.pinned ? "Top, by hand" : "Top"}</Badge> : null}
-        {note.revision > 1 ? <span>revision {note.revision}</span> : null}
+        <span>Источник</span>
+        {note.source.kind === "session" ? <CopyValue value={note.source.session} label={sourceText(note.source)} /> :
+          note.source.kind === "record" ? <CopyValue value={note.source.record} label={sourceText(note.source)} /> : <span>{sourceText(note.source)}</span>}
+        {note.top ? <span>{note.pinned ? "Закреплено вручную" : "Показывается агенту первой"}</span> : null}
+        {note.revision > 1 ? <span>версия {note.revision}</span> : null}
       </div>
     </li>
   );
@@ -36,7 +38,7 @@ function NoteRow({ note }: { note: Note }) {
 
 function TopLayer({ notes }: { notes: readonly Note[] }) {
   const parts = topParts(notes);
-  if (parts.length === 0) return <p className="text-sm text-muted-foreground">Nothing is lifted into the top layer yet.</p>;
+  if (parts.length === 0) return <p className="text-sm text-muted-foreground">В приоритетных заметках пока пусто.</p>;
   return (
     <div data-slot="top-layer" className="flex min-w-0 flex-col gap-3">
       {parts.map((part) => (
@@ -55,8 +57,8 @@ function TopLayer({ notes }: { notes: readonly Note[] }) {
 
 function PageBody({ memory, page }: { memory: string; page: string }) {
   const got = useCall(pageGetAction, { memory, page }, PAGES);
-  if (got.isPending) return <p className="text-sm text-muted-foreground">Loading the page…</p>;
-  if (got.isError) return <Failed what="page" message={got.error.message} />;
+  if (got.isPending) return <p className="text-sm text-muted-foreground">Загружаем страницу…</p>;
+  if (got.isError) return <Failed what="страницу" message={got.error.message} />;
   return (
     <article data-slot="memory-page" className="flex min-w-0 flex-col gap-2 rounded-lg border bg-card p-3 text-card-foreground">
       <h4 className="text-sm font-semibold">{got.data.title}</h4>
@@ -67,20 +69,20 @@ function PageBody({ memory, page }: { memory: string; page: string }) {
 
 function Pages({ memory, open }: { memory: string; open: string | undefined }) {
   const pages = useCall(pageListAction, { memory }, PAGES);
-  if (pages.isPending) return <p className="text-sm text-muted-foreground">Loading the pages…</p>;
-  if (pages.isError) return <Failed what="pages" message={pages.error.message} />;
-  if (pages.data.pages.length === 0) return <p className="text-sm text-muted-foreground">No pages yet.</p>;
+  if (pages.isPending) return <p className="text-sm text-muted-foreground">Загружаем страницы…</p>;
+  if (pages.isError) return <Failed what="страницы" message={pages.error.message} />;
+  if (pages.data.pages.length === 0) return <p className="text-sm text-muted-foreground">Для этой памяти пока нет страниц.</p>;
   return (
     <div className="flex min-w-0 flex-col gap-2">
       <ul data-slot="pages" className="divide-y rounded-lg border bg-card px-3 text-card-foreground">
         {pages.data.pages.map((page: PageSummary) => (
-          <li key={page.page} data-slot="page-row" className="flex min-w-0 items-center gap-3 py-2">
+          <li key={page.page} data-slot="page-row" className="flex min-w-0 flex-wrap items-center gap-2 py-2">
             <PageLink to={memoryPath(memory, page.page)} className="min-w-0 truncate text-sm font-medium hover:underline">
               {page.title}
             </PageLink>
-            <span className="font-mono text-xs text-muted-foreground">{page.page}</span>
-            {page.project === undefined ? null : <span className="text-xs text-muted-foreground">{page.project}</span>}
-            <span className="ml-auto shrink-0 text-xs text-muted-foreground">revision {page.revision}</span>
+            <span className="text-xs"><CopyValue value={page.page} /></span>
+            {page.project === undefined ? null : <span className="text-xs text-muted-foreground"><DataValue value={page.project} /></span>}
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground">версия {page.revision}</span>
           </li>
         ))}
       </ul>
@@ -92,11 +94,11 @@ function Pages({ memory, open }: { memory: string; open: string | undefined }) {
 /** The note a question is about, read when it is shown: its text only while it holds as the question named it. */
 function QuestionNote({ reference }: { reference: NonNullable<ShareQuestion["reference"]> }) {
   const got = useCall(noteGetAction, { memory: reference.memory, note: reference.note }, NOTES);
-  if (got.isPending) return <span className="text-xs text-muted-foreground">Reading the note…</span>;
-  if (got.isError) return <span className="text-xs text-muted-foreground">The note can no longer be read.</span>;
+  if (got.isPending) return <span className="text-xs text-muted-foreground">Загружаем заметку…</span>;
+  if (got.isError) return <span className="text-xs text-muted-foreground">Заметка больше недоступна.</span>;
   const text = shownText(reference, got.data);
   return text === undefined ? (
-    <span className="text-xs text-muted-foreground">The note changed since this was asked.</span>
+    <span className="text-xs text-muted-foreground">После отправки вопроса заметка изменилась.</span>
   ) : (
     <span className="whitespace-pre-wrap text-sm">{text}</span>
   );
@@ -104,20 +106,20 @@ function QuestionNote({ reference }: { reference: NonNullable<ShareQuestion["ref
 
 function ShareQuestions({ memory }: { memory: string }) {
   const open = useCall(openAction, {}, SHARES);
-  if (open.isPending) return <p className="text-sm text-muted-foreground">Loading the questions…</p>;
-  if (open.isError) return <Failed what="questions" message={open.error.message} />;
+  if (open.isPending) return <p className="text-sm text-muted-foreground">Загружаем вопросы…</p>;
+  if (open.isError) return <Failed what="вопросы" message={open.error.message} />;
   const questions = shareQuestions(open.data.requests, memory);
-  if (questions.length === 0) return <p className="text-sm text-muted-foreground">No question waits for you about what this memory may tell.</p>;
+  if (questions.length === 0) return <p className="text-sm text-muted-foreground">Нет вопросов о доступе к этой памяти.</p>;
   return (
     <ul data-slot="share-questions" className="divide-y rounded-lg border bg-card px-3 text-card-foreground">
       {questions.map((question) => (
         <li key={question.id} data-slot="share-question" className="flex min-w-0 flex-col gap-1 py-2">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 truncate text-sm font-medium">{question.title}</span>
+            <span className="min-w-0 break-words text-sm font-medium">{question.title}</span>
             <EntityLink entity={{ kind: "request", id: question.id }} short />
           </div>
           {question.reference === undefined ? null : <QuestionNote reference={question.reference} />}
-          {question.purpose === undefined ? null : <span className="whitespace-pre-wrap text-xs text-muted-foreground">Wanted to: {question.purpose}</span>}
+          {question.purpose === undefined ? null : <span className="whitespace-pre-wrap text-xs text-muted-foreground">Цель запроса · {question.purpose}</span>}
         </li>
       ))}
     </ul>
@@ -129,21 +131,21 @@ function MemoryView({ memory, page }: { memory: string; page: string | undefined
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <section className="flex min-w-0 flex-col gap-2">
-        <h3 className="text-sm font-semibold text-muted-foreground">Shown first</h3>
-        {notes.isPending ? <p className="text-sm text-muted-foreground">Loading the notes…</p> : notes.isError ? <Failed what="notes" message={notes.error.message} /> : <TopLayer notes={notes.data.notes} />}
-      </section>
-      <section className="flex min-w-0 flex-col gap-2">
-        <h3 className="text-sm font-semibold text-muted-foreground">Waiting for you</h3>
+        <h3 className="text-sm font-semibold text-muted-foreground">Вопросы о доступе к памяти</h3>
         <ShareQuestions memory={memory} />
       </section>
       <section className="flex min-w-0 flex-col gap-2">
-        <h3 className="text-sm font-semibold text-muted-foreground">Notes</h3>
+        <h3 className="text-sm font-semibold text-muted-foreground">Приоритетные заметки</h3>
+        {notes.isPending ? <p className="text-sm text-muted-foreground">Загружаем заметки…</p> : notes.isError ? <Failed what="заметки" message={notes.error.message} /> : <TopLayer notes={notes.data.notes} />}
+      </section>
+      <section className="flex min-w-0 flex-col gap-2">
+        <h3 className="text-sm font-semibold text-muted-foreground">Все заметки</h3>
         {notes.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading the notes…</p>
+          <p className="text-sm text-muted-foreground">Загружаем заметки…</p>
         ) : notes.isError ? (
-          <Failed what="notes" message={notes.error.message} />
+          <Failed what="заметки" message={notes.error.message} />
         ) : notes.data.notes.length === 0 ? (
-          <p className="text-sm text-muted-foreground">This memory holds no notes yet.</p>
+          <p className="text-sm text-muted-foreground">У этого агента пока нет заметок.</p>
         ) : (
           <ul data-slot="notes" className="divide-y rounded-lg border bg-card px-3 text-card-foreground">
             {newestFirst(notes.data.notes).map((note) => (
@@ -153,7 +155,7 @@ function MemoryView({ memory, page }: { memory: string; page: string | undefined
         )}
       </section>
       <section className="flex min-w-0 flex-col gap-2">
-        <h3 className="text-sm font-semibold text-muted-foreground">Pages</h3>
+        <h3 className="text-sm font-semibold text-muted-foreground">Страницы</h3>
         <Pages memory={memory} open={page} />
       </section>
     </div>
@@ -165,17 +167,16 @@ export function MemoryPage({ search }: PageProps<"/memory">) {
   const names = agents.data?.items.map((one) => one.name) ?? [];
   const memory = memoryChoice(search["memory"], names);
   return (
-    <div className="flex min-w-0 flex-col gap-3 p-4">
-      <h2 className="text-lg font-semibold">Memory</h2>
+    <div className="desk-page">
       {agents.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading the memories…</p>
+        <p className="text-sm text-muted-foreground">Загружаем список агентов…</p>
       ) : agents.isError ? (
-        <Failed what="memories" message={agents.error.message} />
+        <Failed what="список агентов" message={agents.error.message} />
       ) : memory === undefined ? (
-        <p className="text-sm text-muted-foreground">There is no agent, so no memory.</p>
+        <p className="text-sm text-muted-foreground">Добавьте агента, чтобы открыть его память.</p>
       ) : (
         <>
-          <nav data-slot="memories" className="flex flex-wrap items-center gap-1 text-sm">
+          <nav aria-label="Агенты" data-slot="memories" className="flex flex-wrap items-center gap-1 text-sm">
             {names.map((name) => (
               <PageLink key={name} to={memoryPath(name)} className={name === memory ? "rounded bg-muted px-2 py-0.5 font-semibold" : "rounded px-2 py-0.5 hover:bg-muted"}>
                 {name}

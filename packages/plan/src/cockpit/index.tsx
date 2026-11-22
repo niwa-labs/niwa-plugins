@@ -9,7 +9,8 @@ export default definePlugin({
   setup(ctx) {
     ctx.pages.add({
       path: "/plans",
-      title: "Plans",
+      title: "Планы",
+      commandHeading: true,
       nav: { order: 55 },
       commands: [{ action: "plan.set", label: "Составить план" }],
       component: PlansPage,

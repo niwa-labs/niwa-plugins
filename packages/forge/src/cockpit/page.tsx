@@ -1,23 +1,29 @@
 /** The repositories the forge watches, the merges the server holds for later, and the pull requests with their pipelines. */
 
-import { useAction, useCall } from "@niwa-labs/cockpit-sdk";
-import { Badge, Button, StateRing } from "@niwa-labs/ui-kit";
+import { HostCallError, useAction, useCall } from "@niwa-labs/cockpit-sdk";
+import { Button, CopyValue, DataValue, StateRing } from "@niwa-labs/ui-kit";
 
 import { cancelMergeAction, pendingAction, prListAction, repoListAction, repoSyncAction, type ObservedPr, type PendingMerge, type Repo } from "./actions.ts";
-import { CHECKS_LABEL, CHECKS_RING, MODE_LABEL, PIPELINE_RING, armedBy, byRepo, cancelInput, pipelineText, prKey, prLabel, repoLabel } from "./pulls.ts";
+import { CHECKS_LABEL, CHECKS_RING, MODE_LABEL, PIPELINE_RING, PIPELINE_STATUS, PR_STATUS, armedBy, byRepo, cancelInput, pipelineText, prKey, prLabel, repoLabel } from "./pulls.ts";
 
 const REFRESH = { refreshOn: { types: ["forge.*"] } };
+
+function errorStatus(error: Error): string {
+  if (!(error instanceof HostCallError)) return "Проверьте подключение к хосту.";
+  if (error.status === 401 || error.status === 403) return "Доступ ограничен.";
+  return `Код ответа ${error.status}.`;
+}
 
 function RepoRow({ repo }: { repo: Repo }) {
   const sync = useAction(repoSyncAction);
   return (
-    <li data-slot="repo-row" className="flex min-w-0 items-center gap-3 py-2">
-      <span className="min-w-0 truncate font-mono text-sm">{repoLabel(repo)}</span>
+    <li data-slot="repo-row" className="flex min-w-0 flex-wrap items-center gap-3 py-2">
+      <DataValue value={repoLabel(repo)} />
       <Button className="ml-auto" variant="outline" size="sm" disabled={sync.isPending} onClick={() => sync.mutate({ repo: { host: repo.host, path: repo.path } })}>
-        Sync now
+        Синхронизировать
       </Button>
-      {sync.isError ? <span role="alert" className="text-xs text-destructive">{sync.error.message}</span> : null}
-      {sync.data === undefined ? null : <span className="text-xs text-muted-foreground">{sync.data.written} records written</span>}
+      {sync.isError ? <span role="alert" className="text-xs text-destructive">Не удалось синхронизировать репозиторий. {errorStatus(sync.error)}</span> : null}
+      {sync.data === undefined ? null : <span className="text-xs text-muted-foreground">{sync.data.written} записей обновлено</span>}
     </li>
   );
 }
@@ -26,24 +32,26 @@ function ArmedCard({ pending, title }: { pending: PendingMerge; title: string | 
   const cancel = useAction(cancelMergeAction);
   const input = cancelInput(pending);
   return (
-    <li data-slot="armed-merge" data-mode={pending.mode} className="flex min-w-0 items-center gap-3 rounded-lg border bg-card px-3 py-2 text-card-foreground">
-      <StateRing state="waiting" label="Armed" />
-      <div className="flex min-w-0 flex-col">
-        <span className="truncate text-sm font-medium">
+    <li data-slot="armed-merge" data-mode={pending.mode} className="min-w-0" style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)", alignItems: "start", columnGap: "0.75rem", paddingBlock: "0.6rem" }}>
+      <StateRing state="waiting" label="Слияние отложено" />
+      <div className="flex min-w-0 flex-col gap-1">
+        <span className="break-words text-sm font-medium">
           {prLabel(pending.pr)}
           {title === undefined ? "" : ` · ${title}`}
         </span>
-        <span className="text-xs text-muted-foreground">{MODE_LABEL[pending.mode]}, expecting head {pending.expectHead.slice(0, 8)}</span>
+        <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">{MODE_LABEL[pending.mode]} <CopyValue value={pending.expectHead} label={`Коммит ${pending.expectHead.slice(0, 8)}`} /></p>
+        {input === undefined ? (
+          <span className="text-xs text-muted-foreground">Отмена доступна через другое действие</span>
+        ) : (
+          <div>
+            <Button variant="outline" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate(input)}>
+              Отменить слияние
+            </Button>
+          </div>
+        )}
+        {cancel.isError ? <span role="alert" className="text-xs text-destructive">Не удалось отменить слияние. {errorStatus(cancel.error)}</span> : null}
+        {cancel.data?.cancelled === false ? <span role="status" className="text-xs text-muted-foreground">На сервере уже нет отложенного слияния.</span> : null}
       </div>
-      {input === undefined ? (
-        <span className="ml-auto text-xs text-muted-foreground">Called off by {pending.cancel.action}</span>
-      ) : (
-        <Button className="ml-auto" variant="outline" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate(input)}>
-          Cancel merge
-        </Button>
-      )}
-      {cancel.isError ? <span role="alert" className="text-xs text-destructive">{cancel.error.message}</span> : null}
-      {cancel.data?.cancelled === false ? <span role="status" className="text-xs text-muted-foreground">The server held no merge to call off.</span> : null}
     </li>
   );
 }
@@ -51,23 +59,26 @@ function ArmedCard({ pending, title }: { pending: PendingMerge; title: string | 
 function PrRow({ one, armed }: { one: ObservedPr; armed: PendingMerge | undefined }) {
   return (
     <li data-slot="pr-row" data-state={one.state} className="flex min-w-0 flex-col gap-1 py-2">
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="min-w-0" style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)", alignItems: "start", columnGap: "0.75rem" }}>
         <StateRing state={CHECKS_RING[one.checks]} label={CHECKS_LABEL[one.checks]} />
-        <span className="min-w-0 truncate text-sm font-medium">{one.title}</span>
-        <span className="shrink-0 text-xs text-muted-foreground">!{one.pr.number} · {one.branch} into {one.base}</span>
-        {one.draft ? <Badge variant="outline">Draft</Badge> : null}
-        {armed === undefined ? null : <Badge variant="secondary">Merge armed</Badge>}
-        <Badge className="ml-auto shrink-0" variant={one.state === "open" ? "default" : "secondary"}>
-          {one.state}
-        </Badge>
+        <div className="flex min-w-0 flex-col gap-1">
+          <p className="break-words text-sm font-medium">{one.title}</p>
+          <p className="desk-tools text-xs text-muted-foreground">
+            <CopyValue value={prLabel(one.pr)} />
+            <span className="break-all">{one.branch} → {one.base}</span>
+            <span>{one.draft ? "Черновик" : PR_STATUS[one.state]}</span>
+            {armed === undefined ? null : <span>Слияние отложено</span>}
+            <span className={one.checks === "red" ? "font-medium text-destructive" : "font-medium text-foreground"}>{CHECKS_LABEL[one.checks]}</span>
+          </p>
+        </div>
       </div>
       {one.pipelines.length === 0 ? null : (
         <ul data-slot="pipelines" className="ml-6 flex flex-col gap-0.5">
           {one.pipelines.map((pipeline) => (
-            <li key={pipeline.pipeline} className="flex items-center gap-2 text-xs text-muted-foreground">
-              <StateRing state={PIPELINE_RING[pipeline.state]} label={pipeline.state} />
+            <li key={pipeline.pipeline} className="desk-tools text-xs text-muted-foreground">
+              <StateRing state={PIPELINE_RING[pipeline.state]} label={PIPELINE_STATUS[pipeline.state]} />
               <span className="font-mono">{pipelineText(pipeline)}</span>
-              <span>{pipeline.state}</span>
+              <span>{PIPELINE_STATUS[pipeline.state]}</span>
             </li>
           ))}
         </ul>
@@ -76,8 +87,8 @@ function PrRow({ one, armed }: { one: ObservedPr; armed: PendingMerge | undefine
   );
 }
 
-function Failed({ what, message }: { what: string; message: string }) {
-  return <p role="alert" className="text-sm text-destructive">The {what} could not be read: {message}</p>;
+function Failed({ what, error }: { what: string; error: Error }) {
+  return <p role="alert" className="text-sm text-destructive">Не удалось загрузить {what}. {errorStatus(error)}</p>;
 }
 
 export function ForgePage() {
@@ -87,36 +98,38 @@ export function ForgePage() {
   const titles = new Map((prs.data?.items ?? []).map((one) => [prKey(one.pr), one.title]));
   const armed = armedBy(pending.data?.items ?? []);
   return (
-    <div className="flex min-w-0 flex-col gap-4 p-4">
-      <h2 className="text-lg font-semibold">Forge</h2>
-
+    <div className="desk-page">
       <section className="flex min-w-0 flex-col gap-2">
-        <h3 className="text-sm font-semibold text-muted-foreground">Watched repositories</h3>
-        {repos.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading the repositories…</p>
-        ) : repos.isError ? (
-          <Failed what="repositories" message={repos.error.message} />
-        ) : repos.data.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No repository is watched yet.</p>
+        {prs.isPending ? (
+          <p className="text-sm text-muted-foreground">Загружаем запросы на слияние…</p>
+        ) : prs.isError ? (
+          <Failed what="запросы на слияние" error={prs.error} />
+        ) : prs.data.items.length === 0 ? (
+          <p className="text-sm text-muted-foreground">В подключённых репозиториях ещё нет наблюдаемых запросов.</p>
         ) : (
-          <ul data-slot="repos" className="divide-y rounded-lg border bg-card px-3 text-card-foreground">
-            {repos.data.items.map((repo) => (
-              <RepoRow key={`${repo.host}/${String(repo.projectId)}`} repo={repo} />
-            ))}
-          </ul>
+          byRepo(prs.data.items).map((group) => (
+            <div key={repoLabel(group.repo)} data-slot="repo-prs" className="flex min-w-0 flex-col gap-1">
+              <h4 className="text-xs text-muted-foreground"><DataValue value={repoLabel(group.repo)} /></h4>
+              <ul className="divide-y rounded-lg border bg-card px-3 text-card-foreground">
+                {group.prs.map((one) => (
+                  <PrRow key={prKey(one.pr)} one={one} armed={armed.get(prKey(one.pr))} />
+                ))}
+              </ul>
+            </div>
+          ))
         )}
       </section>
 
       <section className="flex min-w-0 flex-col gap-2">
-        <h3 className="text-sm font-semibold text-muted-foreground">Merges held for later</h3>
+        <h3 className="text-sm font-semibold text-muted-foreground">Отложенные слияния</h3>
         {pending.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading the merges…</p>
+          <p className="text-sm text-muted-foreground">Загружаем отложенные слияния…</p>
         ) : pending.isError ? (
-          <Failed what="merges" message={pending.error.message} />
+          <Failed what="отложенные слияния" error={pending.error} />
         ) : pending.data.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">The server holds no merge for later.</p>
+          <p className="text-sm text-muted-foreground">Отложенных слияний нет.</p>
         ) : (
-          <ul data-slot="armed-merges" className="flex flex-col gap-2">
+          <ul data-slot="armed-merges" className="divide-y rounded-lg border bg-card px-3">
             {pending.data.items.map((one) => (
               <ArmedCard key={one.externalId} pending={one} title={titles.get(prKey(one.pr))} />
             ))}
@@ -125,24 +138,19 @@ export function ForgePage() {
       </section>
 
       <section className="flex min-w-0 flex-col gap-2">
-        <h3 className="text-sm font-semibold text-muted-foreground">Pull requests</h3>
-        {prs.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading the pull requests…</p>
-        ) : prs.isError ? (
-          <Failed what="pull requests" message={prs.error.message} />
-        ) : prs.data.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No pull request was observed yet.</p>
+        <h3 className="text-sm font-semibold text-muted-foreground">Подключённые репозитории</h3>
+        {repos.isPending ? (
+          <p className="text-sm text-muted-foreground">Загружаем репозитории…</p>
+        ) : repos.isError ? (
+          <Failed what="репозитории" error={repos.error} />
+        ) : repos.data.items.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Подключите репозиторий GitLab, чтобы видеть запросы на слияние и проверки.</p>
         ) : (
-          byRepo(prs.data.items).map((group) => (
-            <div key={repoLabel(group.repo)} data-slot="repo-prs" className="flex min-w-0 flex-col gap-1">
-              <h4 className="truncate font-mono text-xs text-muted-foreground">{repoLabel(group.repo)}</h4>
-              <ul className="divide-y rounded-lg border bg-card px-3 text-card-foreground">
-                {group.prs.map((one) => (
-                  <PrRow key={prKey(one.pr)} one={one} armed={armed.get(prKey(one.pr))} />
-                ))}
-              </ul>
-            </div>
-          ))
+          <ul data-slot="repos" className="divide-y rounded-lg border bg-card px-3 text-card-foreground">
+            {repos.data.items.map((repo) => (
+              <RepoRow key={`${repo.host}/${String(repo.projectId)}`} repo={repo} />
+            ))}
+          </ul>
         )}
       </section>
     </div>

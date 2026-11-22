@@ -9,7 +9,8 @@ export default definePlugin({
   setup(ctx) {
     ctx.pages.add({
       path: "/evidence",
-      title: "Evidence",
+      title: "Свидетельства",
+      commandHeading: true,
       nav: { order: 70 },
       commands: [{ action: "evidence.attest", label: "Добавить свидетельство" }],
       component: EvidencePage,

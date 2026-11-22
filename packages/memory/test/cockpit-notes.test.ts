@@ -23,16 +23,16 @@ test("the top layer is by part: the owner first, then each project, then what ho
     note("coffee", { about: "owner", project: "/work/billing", top: true }),
   ]);
   expect(parts.map((part) => [part.heading, part.notes.map((one) => one.text)])).toEqual([
-    ["About the owner", ["coffee", "tea"]],
-    ["For /work/billing", ["billing"]],
-    ["For /work/payroll", ["payroll"]],
-    ["In general", ["new general", "old general"]],
+    ["О владельце", ["coffee", "tea"]],
+    ["Проект /work/billing", ["billing"]],
+    ["Проект /work/payroll", ["payroll"]],
+    ["Общее", ["new general", "old general"]],
   ]);
 });
 
 test("a part with nothing lifted is not shown", () => {
   expect(topParts([note("a"), note("b", { about: "owner" })])).toEqual([]);
-  expect(topParts([note("a", { top: true })]).map((part) => part.heading)).toEqual(["In general"]);
+  expect(topParts([note("a", { top: true })]).map((part) => part.heading)).toEqual(["Общее"]);
 });
 
 test("notes are listed newest first", () => {
@@ -40,13 +40,13 @@ test("notes are listed newest first", () => {
 });
 
 test("a source and a note's standing read in a few words", () => {
-  expect(sourceText({ kind: "owner" })).toBe("the owner's word");
-  expect(sourceText({ kind: "inferred" })).toBe("the writer's conclusion");
-  expect(sourceText({ kind: "session", session: "claude s-1" })).toBe("session claude s-1");
-  expect(sourceText({ kind: "record", record: "r-9" })).toBe("record r-9");
-  expect(standingText({ confirmed: true, sources: 1 })).toBe("confirmed by the owner");
-  expect(standingText({ confirmed: false, sources: 1 })).toBe("one source");
-  expect(standingText({ confirmed: false, sources: 3 })).toBe("3 sources");
+  expect(sourceText({ kind: "owner" })).toBe("слова владельца");
+  expect(sourceText({ kind: "inferred" })).toBe("вывод автора");
+  expect(sourceText({ kind: "session", session: "claude s-1" })).toBe("сессия claude s-1");
+  expect(sourceText({ kind: "record", record: "r-9" })).toBe("запись r-9");
+  expect(standingText({ confirmed: true, sources: 1 })).toBe("подтверждено владельцем");
+  expect(standingText({ confirmed: false, sources: 1 })).toBe("один источник");
+  expect(standingText({ confirmed: false, sources: 3 })).toBe("источников: 3");
 });
 
 test("the memory asked for is shown when an agent has it, else the first", () => {

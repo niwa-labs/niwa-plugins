@@ -9,13 +9,13 @@ const merge = z.object({
 });
 
 const labels: Record<string, string> = {
-  "forge.pr.merge.started": "Merge requested",
-  "forge.pr.merge.cancel.started": "Cancellation requested",
-  "forge.pr.merge.cancel.refused": "Cancellation refused",
-  "forge.pr.merge.armed": "Merge armed",
-  "forge.pr.merge.settled": "Merge settled",
-  "forge.pr.merge.disarmed": "Merge disarmed",
-  "forge.pr.merge.refused": "Merge refused",
+  "forge.pr.merge.started": "Запрошено слияние",
+  "forge.pr.merge.cancel.started": "Запрошена отмена",
+  "forge.pr.merge.cancel.refused": "В отмене отказано",
+  "forge.pr.merge.armed": "Слияние отложено",
+  "forge.pr.merge.settled": "Подтверждён итог слияния",
+  "forge.pr.merge.disarmed": "Отложенное слияние отменено",
+  "forge.pr.merge.refused": "В слиянии отказано",
 };
 
 export const decisionTypes = ["niwa.record.refused", ...Object.keys(labels)];

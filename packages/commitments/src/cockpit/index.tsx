@@ -9,7 +9,8 @@ export default definePlugin({
   setup(ctx) {
     ctx.pages.add({
       path: "/commitments",
-      title: "Commitments",
+      title: "Обязательства",
+      commandHeading: true,
       nav: { order: 45 },
       commands: [{ action: "commitment.make", label: "Добавить обязательство" }],
       component: CommitmentsPage,

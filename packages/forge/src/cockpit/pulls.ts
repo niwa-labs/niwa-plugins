@@ -21,7 +21,7 @@ export function repoLabel(repo: Pick<Repo, "host" | "path">): string {
 
 export const CHECKS_RING: Readonly<Record<ChecksState, WorkState>> = { none: "pending", pending: "running", green: "done", red: "failed" };
 
-export const CHECKS_LABEL: Readonly<Record<ChecksState, string>> = { none: "No checks", pending: "Checks running", green: "Checks green", red: "Checks red" };
+export const CHECKS_LABEL: Readonly<Record<ChecksState, string>> = { none: "Нет проверок", pending: "Проверки идут", green: "Проверки пройдены", red: "Проверки не пройдены" };
 
 export const PIPELINE_RING: Readonly<Record<RunState, WorkState>> = {
   created: "pending",
@@ -37,13 +37,33 @@ export const PIPELINE_RING: Readonly<Record<RunState, WorkState>> = {
   scheduled: "pending",
 };
 
+export const PR_STATUS: Readonly<Record<ObservedPr["state"], string>> = {
+  open: "Открыт",
+  merged: "Слит",
+  closed: "Закрыт",
+};
+
+export const PIPELINE_STATUS: Readonly<Record<RunState, string>> = {
+  created: "Создан",
+  waiting_for_resource: "Ждёт ресурса",
+  preparing: "Подготовка",
+  pending: "В очереди",
+  running: "Выполняется",
+  success: "Успешно",
+  failed: "Ошибка",
+  canceled: "Отменён",
+  skipped: "Пропущен",
+  manual: "Ждёт ручного запуска",
+  scheduled: "Запланирован",
+};
+
 const KIND_LABEL: Readonly<Record<PipelineKind, string>> = {
-  head: "head",
-  "merge-result": "merge result",
-  train: "merge train",
-  branch: "branch",
-  tag: "tag",
-  schedule: "schedule",
+  head: "коммит",
+  "merge-result": "результат слияния",
+  train: "очередь слияния",
+  branch: "ветка",
+  tag: "тег",
+  schedule: "по расписанию",
 };
 
 const short = (sha: string): string => sha.slice(0, 8);
@@ -51,7 +71,7 @@ const short = (sha: string): string => sha.slice(0, 8);
 /** A pipeline in a line: its number, what it ran on, and for a merge result the pair of commits it was made of. */
 export function pipelineText(pipeline: PrPipeline): string {
   const what = KIND_LABEL[pipeline.kind];
-  const pair = pipeline.targetSha === undefined ? short(pipeline.sourceSha) : `${short(pipeline.sourceSha)} into ${short(pipeline.targetSha)}`;
+  const pair = pipeline.targetSha === undefined ? short(pipeline.sourceSha) : `${short(pipeline.sourceSha)} → ${short(pipeline.targetSha)}`;
   return `#${String(pipeline.pipeline)} ${what} ${pair}`;
 }
 
@@ -60,7 +80,7 @@ export function armedBy(pending: readonly PendingMerge[]): Map<string, PendingMe
   return new Map(pending.map((one) => [prKey(one.pr), one]));
 }
 
-export const MODE_LABEL: Readonly<Record<PendingMerge["mode"], string>> = { "auto-merge": "merges when the pipeline succeeds", train: "waits in the merge train" };
+export const MODE_LABEL: Readonly<Record<PendingMerge["mode"], string>> = { "auto-merge": "Слияние после успешных проверок", train: "В очереди слияния" };
 
 /**
  * What cancelling a merge sends: the input the host gave with it, as it is, and only when the action it names is the one

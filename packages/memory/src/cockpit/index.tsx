@@ -9,7 +9,8 @@ export default definePlugin({
   setup(ctx) {
     ctx.pages.add({
       path: "/memory",
-      title: "Memory",
+      title: "Память",
+      commandHeading: true,
       nav: { order: 65 },
       commands: [
         { action: "memory.note", label: "Добавить заметку" },

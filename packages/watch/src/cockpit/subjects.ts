@@ -26,21 +26,21 @@ export const RING: Readonly<Record<WatchState, WorkState>> = {
 
 /** What a state is called on the page. */
 export const STATE_LABEL: Readonly<Record<WatchState, string>> = {
-  working: "Working",
-  "waiting-human": "Waiting for a person",
-  "waiting-event": "Waiting for an event",
-  sleeping: "Sleeping",
-  idle: "Idle",
-  looping: "Looping",
-  stuck: "Stuck",
-  unknown: "Unknown",
+  working: "В работе",
+  "waiting-human": "Ждёт ответа",
+  "waiting-event": "Ждёт события",
+  sleeping: "Пауза по таймеру",
+  idle: "Простаивает",
+  looping: "Зациклилось",
+  stuck: "Застряло",
+  unknown: "Нет данных",
 };
 
 /** What a stuck kind says about the subject. */
 export const KIND_LABEL: Readonly<Record<StuckKind, string>> = {
-  silent: "no sign of life",
-  looping: "repeating itself",
-  "shielded-cancel": "cancelled, a shielded scope goes on",
+  silent: "Нет активности",
+  looping: "Повторяет один и тот же шаг",
+  "shielded-cancel": "После отмены продолжает защищённую работу",
 };
 
 /** The order states are listed in: what needs the owner first. */
@@ -81,16 +81,16 @@ export function subjectText(subject: string): string {
   return name.kind === "run" ? `run ${name.id}` : `session ${name.harness === "" ? "" : `${name.harness}/`}${name.id}`;
 }
 
-/** A moment in milliseconds since the epoch, as how long ago it was; a moment ahead of `now` is "just now". */
+/** Relative time, with future timestamps shown as just now. */
 export function agoText(at: number, now: number): string {
   const seconds = Math.max(0, Math.round((now - at) / 1000));
-  if (seconds < 5) return "just now";
-  if (seconds < 90) return `${String(seconds)} s ago`;
+  if (seconds < 5) return "только что";
+  if (seconds < 90) return `${String(seconds)} с назад`;
   const minutes = Math.round(seconds / 60);
-  if (minutes < 90) return `${String(minutes)} min ago`;
+  if (minutes < 90) return `${String(minutes)} мин назад`;
   const hours = Math.round(minutes / 60);
-  if (hours < 36) return `${String(hours)} h ago`;
-  return `${String(Math.round(hours / 24))} d ago`;
+  if (hours < 36) return `${String(hours)} ч назад`;
+  return `${String(Math.round(hours / 24))} дн назад`;
 }
 
 /** A record as the feed gives it: the part the incidents read. */

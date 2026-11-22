@@ -29,16 +29,16 @@ test("a revision shows the items it added, changed and removed, and the ones it 
   ]);
   const changed = changes[1];
   if (changed?.kind !== "changed") throw new Error("a was not shown as changed");
-  expect(changeText(changed)).toBe("Decision ahead to Done, note changed");
+  expect(changeText(changed)).toBe("Ждёт решения → Выполнен, Заметка обновлена");
 });
 
 test("rewording an item is a change, and so is taking its note away", () => {
   const [reworded] = changesBetween([item("a", "planned")], [item("a", "planned", { text: "do a differently" })]);
   if (reworded?.kind !== "changed") throw new Error("a was not shown as changed");
-  expect(changeText(reworded)).toBe("reworded");
+  expect(changeText(reworded)).toBe("Текст обновлён");
   const [unnoted] = changesBetween([item("a", "dropped", { note: "no longer needed" })], [item("a", "dropped")]);
   if (unnoted?.kind !== "changed") throw new Error("a was not shown as changed");
-  expect(changeText(unnoted)).toBe("note removed");
+  expect(changeText(unnoted)).toBe("Заметка удалена");
 });
 
 test("an address asks for a whole revision the plan has, and anything else is the latest", () => {

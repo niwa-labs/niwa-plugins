@@ -13,10 +13,10 @@ export const ITEM_RING: Readonly<Record<ItemState, WorkState>> = {
 };
 
 export const ITEM_LABEL: Readonly<Record<ItemState, string>> = {
-  open: "Decision ahead",
-  planned: "Planned",
-  done: "Done",
-  dropped: "Dropped",
+  open: "Ждёт решения",
+  planned: "Запланирован",
+  done: "Выполнен",
+  dropped: "Снят",
 };
 
 /** How many items stand in each state, and how many of the work that is still to be done are done. */
@@ -58,9 +58,9 @@ export function changesBetween(before: readonly PlanItem[], after: readonly Plan
 /** What changed about an item, in a few words: its state or its words. */
 export function changeText(change: Extract<ItemChange, { kind: "changed" }>): string {
   const parts: string[] = [];
-  if (change.before.state !== change.item.state) parts.push(`${ITEM_LABEL[change.before.state]} to ${ITEM_LABEL[change.item.state]}`);
-  if (change.before.text !== change.item.text) parts.push("reworded");
-  if (change.before.note !== change.item.note) parts.push(change.item.note === undefined ? "note removed" : "note changed");
+  if (change.before.state !== change.item.state) parts.push(`${ITEM_LABEL[change.before.state]} → ${ITEM_LABEL[change.item.state]}`);
+  if (change.before.text !== change.item.text) parts.push("Текст обновлён");
+  if (change.before.note !== change.item.note) parts.push(change.item.note === undefined ? "Заметка удалена" : "Заметка обновлена");
   return parts.join(", ");
 }
 

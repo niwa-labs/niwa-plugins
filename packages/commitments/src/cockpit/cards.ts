@@ -17,6 +17,23 @@ export const RING: Record<CommitmentStatus, WorkState> = {
   declined: "skipped",
 };
 
+export const STATUS_LABEL: Record<CommitmentStatus, string> = {
+  proposed: "Ждёт подтверждения",
+  open: "Открыто",
+  due: "Срок наступил",
+  kept: "Выполнено",
+  "kept-late": "Выполнено с опозданием",
+  missed: "Просрочено",
+  cancelled: "Отменено",
+  declined: "Отклонено",
+};
+
+export function commitmentsByStatus<T extends Pick<CommitmentItem, "status" | "due">>(items: readonly T[]) {
+  const open = items.filter((item) => cancellable(item.status));
+  open.sort((a, b) => (a.due ?? Infinity) - (b.due ?? Infinity));
+  return { open, history: items.filter((item) => !cancellable(item.status)) };
+}
+
 /** Whether a commitment may still be cancelled: it has not ended. */
 export function cancellable(status: CommitmentStatus): boolean {
   return status === "proposed" || status === "open" || status === "due";
