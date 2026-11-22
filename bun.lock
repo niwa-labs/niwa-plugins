@@ -13,7 +13,7 @@
     },
     "packages/commitments": {
       "name": "@niwa-labs/commitments",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@niwa-labs/agent": "*",
         "@niwa-labs/cockpit-sdk": "*",
@@ -40,7 +40,7 @@
     },
     "packages/delegate": {
       "name": "@niwa-labs/delegate",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@niwa-labs/core": "*",
         "@niwa-labs/plugin": "*",
@@ -53,7 +53,7 @@
     },
     "packages/evidence": {
       "name": "@niwa-labs/evidence",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@niwa-labs/cockpit-sdk": "*",
         "@niwa-labs/core": "*",
@@ -77,7 +77,7 @@
     },
     "packages/forge": {
       "name": "@niwa-labs/forge",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@niwa-labs/cockpit-sdk": "*",
         "@niwa-labs/core": "*",
@@ -101,7 +101,7 @@
     },
     "packages/memory": {
       "name": "@niwa-labs/memory",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@niwa-labs/agent": "*",
         "@niwa-labs/cockpit-sdk": "*",
@@ -129,7 +129,7 @@
     },
     "packages/plan": {
       "name": "@niwa-labs/plan",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@niwa-labs/cockpit-sdk": "*",
         "@niwa-labs/core": "*",
@@ -153,7 +153,7 @@
     },
     "packages/watch": {
       "name": "@niwa-labs/watch",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@niwa-labs/cockpit-sdk": "*",
         "@niwa-labs/core": "*",
