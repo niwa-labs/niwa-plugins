@@ -7,6 +7,12 @@ import { CommitmentsPage } from "./page.tsx";
 export default definePlugin({
   id: "commitments",
   setup(ctx) {
-    ctx.pages.add({ path: "/commitments", title: "Commitments", nav: { order: 45 }, component: CommitmentsPage });
+    ctx.pages.add({
+      path: "/commitments",
+      title: "Commitments",
+      nav: { order: 45 },
+      commands: [{ action: "commitment.make", label: "Добавить обязательство" }],
+      component: CommitmentsPage,
+    });
   },
 });

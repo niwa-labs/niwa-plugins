@@ -7,6 +7,12 @@ import { EvidencePage } from "./page.tsx";
 export default definePlugin({
   id: "evidence",
   setup(ctx) {
-    ctx.pages.add({ path: "/evidence", title: "Evidence", nav: { order: 70 }, component: EvidencePage });
+    ctx.pages.add({
+      path: "/evidence",
+      title: "Evidence",
+      nav: { order: 70 },
+      commands: [{ action: "evidence.attest", label: "Добавить свидетельство" }],
+      component: EvidencePage,
+    });
   },
 });

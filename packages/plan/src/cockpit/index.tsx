@@ -7,6 +7,12 @@ import { PlansPage } from "./page.tsx";
 export default definePlugin({
   id: "plan",
   setup(ctx) {
-    ctx.pages.add({ path: "/plans", title: "Plans", nav: { order: 55 }, component: PlansPage });
+    ctx.pages.add({
+      path: "/plans",
+      title: "Plans",
+      nav: { order: 55 },
+      commands: [{ action: "plan.set", label: "Составить план" }],
+      component: PlansPage,
+    });
   },
 });

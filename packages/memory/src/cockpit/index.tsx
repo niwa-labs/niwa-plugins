@@ -7,6 +7,16 @@ import { MemoryPage } from "./page.tsx";
 export default definePlugin({
   id: "memory",
   setup(ctx) {
-    ctx.pages.add({ path: "/memory", title: "Memory", nav: { order: 65 }, component: MemoryPage });
+    ctx.pages.add({
+      path: "/memory",
+      title: "Memory",
+      nav: { order: 65 },
+      commands: [
+        { action: "memory.note", label: "Добавить заметку" },
+        { action: "memory.page.write", label: "Записать страницу" },
+        { action: "memory.search", label: "Найти запись" },
+      ],
+      component: MemoryPage,
+    });
   },
 });

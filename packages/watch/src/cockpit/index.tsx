@@ -7,6 +7,12 @@ import { WatchPage } from "./page.tsx";
 export default definePlugin({
   id: "watch",
   setup(ctx) {
-    ctx.pages.add({ path: "/watch", title: "Watch", nav: { order: 50 }, component: WatchPage });
+    ctx.pages.add({
+      path: "/watch",
+      title: "Watch",
+      nav: { order: 50 },
+      commands: [{ action: "watch.get", label: "Проверить объект" }],
+      component: WatchPage,
+    });
   },
 });
