@@ -7,7 +7,7 @@ actions and which records a workflow can read or wait for.
 
 | Package | What it adds |
 | --- | --- |
-| [`@niwa-labs/forge`](packages/forge/README.md) | Watches GitLab repositories and records merge requests, pipelines, jobs and checks. With the configured server token it can act on requests and comments. |
+| [`@niwa-labs/forge`](packages/forge/README.md) | Watches GitLab repositories and records merge requests, pipelines, jobs and checks. With the configured server token it can act on requests and comments. GitHub servers are configured the same way and their releases are read through a read-only port for release workflows. |
 | [`@niwa-labs/watch`](packages/watch/README.md) | Reads the journal to show what sessions and runs are doing. It records when they get stuck or recover so workflows can respond. |
 | [`@niwa-labs/evidence`](packages/evidence/README.md) | Records what an actor attested and checks whether the attestation covers the required change or pair of commits. |
 | [`@niwa-labs/plan`](packages/plan/README.md) | Keeps complete revisions of a plan, including its items and open decisions. |

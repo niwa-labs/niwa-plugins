@@ -10,6 +10,7 @@ import { seq } from "@niwa-labs/core";
 import type { JournalReader } from "@niwa-labs/core";
 
 import type { SecretRef } from "./actions.ts";
+import { GitHub } from "./github.ts";
 import { ForgeError, GitLab } from "./gitlab.ts";
 import type { FetchLike } from "./gitlab.ts";
 import { RepoUnwatched, RepoWatched } from "./record-types.ts";
@@ -17,10 +18,15 @@ import type { Repo } from "./record-types.ts";
 import { resolveSecret } from "./secrets.ts";
 import type { RepoName } from "./targets.ts";
 
-/** A GitLab server the module speaks to. */
+/** The kind of a forge server. */
+export type ForgeServerKind = "gitlab" | "github";
+
+/** A server the module speaks to. */
 export interface ForgeServer {
   /** The name of the server as targets name it: its host, without a port. */
   readonly host: string;
+  /** Its kind: a GitLab server or a GitHub one. Default: `gitlab`. */
+  readonly kind?: ForgeServerKind;
   /** Its base URL. Default: `https://<host>`. */
   readonly url?: string;
   /** The secret that holds its token, such as `secret("GITLAB_TOKEN")`. */
@@ -33,6 +39,9 @@ export interface ServersPlace {
   readonly now: () => number;
   readonly fetch: FetchLike;
   readonly env: Readonly<Record<string, string | undefined>>;
+  /** How a GitHub read that the server could not answer waits before it is asked again. Optional:
+   * the timer of the process by default. */
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 /** A repository watched now, and the last event of its log when it was watched. */
@@ -70,6 +79,7 @@ export function repoKey(repo: RepoName): string {
 export class Servers {
   readonly #byHost = new Map<string, ForgeServer>();
   readonly #clients = new Map<string, GitLab>();
+  readonly #githubClients = new Map<string, GitHub>();
   readonly #place: ServersPlace;
 
   constructor(servers: readonly ForgeServer[], place: ServersPlace) {
@@ -85,12 +95,23 @@ export class Servers {
     return [...this.#byHost.keys()];
   }
 
-  /** The client of a server. */
+  /** The server of a host, as configured. */
+  serverOf(host: string): ForgeServer {
+    const server = this.#byHost.get(host);
+    if (server === undefined) throw new ForgeError("unknown-server", `no forge server "${host}" is configured`);
+    return server;
+  }
+
+  /** The kind of a configured host. */
+  kindOf(host: string): ForgeServerKind {
+    return this.serverOf(host).kind ?? "gitlab";
+  }
+
+  /** The client of a GitLab server. */
   client(host: string): GitLab {
     const known = this.#clients.get(host);
     if (known !== undefined) return known;
-    const server = this.#byHost.get(host);
-    if (server === undefined) throw new ForgeError("unknown-server", `no GitLab server "${host}" is configured`);
+    const server = this.serverOf(host);
     const made = new GitLab({
       url: server.url ?? `https://${host}`,
       token: () => resolveSecret(this.#place.home(), server.token.secret, this.#place.env),
@@ -98,6 +119,23 @@ export class Servers {
       now: this.#place.now,
     });
     this.#clients.set(host, made);
+    return made;
+  }
+
+  /** The client of a GitHub server, which only reads. */
+  github(host: string): GitHub {
+    const known = this.#githubClients.get(host);
+    if (known !== undefined) return known;
+    const server = this.serverOf(host);
+    const made = new GitHub({
+      host: server.host,
+      url: server.url,
+      token: () => resolveSecret(this.#place.home(), server.token.secret, this.#place.env),
+      fetch: this.#place.fetch,
+      now: this.#place.now,
+      ...(this.#place.sleep === undefined ? {} : { sleep: this.#place.sleep }),
+    });
+    this.#githubClients.set(host, made);
     return made;
   }
 
@@ -110,6 +148,10 @@ export class Servers {
 
   /** The repository of a name, as the server says now. */
   async lookup(name: RepoName): Promise<Repo> {
+    if (this.kindOf(name.host) === "github") {
+      const repository = await this.github(name.host).get<{ id: number }>(`/repos/${name.path}`);
+      return { host: name.host, path: name.path, projectId: repository.id };
+    }
     const project = await this.client(name.host).get<{ id: number }>(`/projects/${encodeURIComponent(name.path)}`);
     return { host: name.host, path: name.path, projectId: project.id };
   }

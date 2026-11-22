@@ -75,13 +75,32 @@ import type { ForgeServer } from "./servers.ts";
 export * from "./records.ts";
 export { ForgeError } from "./gitlab.ts";
 export type { FetchLike, ForgeErrorCode } from "./gitlab.ts";
-export type { ForgeServer } from "./servers.ts";
+export { GitHub, apiRoot } from "./github.ts";
+export type { GitHubOptions } from "./github.ts";
+export { githubReleaseReader } from "./github-release.ts";
+export type {
+  CheckResult,
+  CiEvidence,
+  GitHubReleaseReader,
+  GitHubReleaseState,
+  ReleaseRepository,
+  RequiredCi,
+  WorkflowEvidence,
+} from "./github-release.ts";
+export { checksStateOf as githubChecksStateOf, pullRequestOf as githubPullRequestOf, runStateOf as githubRunStateOf } from "./github-normalize.ts";
+export type { GitHubPull } from "./github-normalize.ts";
+export type { ForgeServer, ForgeServerKind } from "./servers.ts";
+export { Servers } from "./servers.ts";
 export { DEFAULT_INTERVALS, Poller, pollInterval } from "./observe.ts";
 export type { PollIntervals } from "./observe.ts";
 
 /** What the forge module is given. */
 export interface ForgeOptions {
-  /** The GitLab servers it speaks to. */
+  /**
+   * The servers it speaks to: GitLab servers, and GitHub servers — of `kind: "github"` — whose
+   * repositories it looks up and whose releases a release workflow reads through
+   * `githubReleaseReader`.
+   */
   readonly servers: readonly ForgeServer[];
   /** How it reaches a server. Default: the global `fetch`. */
   readonly fetch?: FetchLike;

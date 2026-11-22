@@ -2,10 +2,11 @@
 
 A plugin for GitLab servers, in the words of pull requests: merge requests,
 pipelines, jobs, checks and comments, observed as records and changed through
-actions.
+actions. A GitHub server is configured the same way, with `kind: "github"`, and
+its releases are read through a port a release workflow speaks to.
 
 ```ts
-import { forge, secret } from "@niwa-labs/forge";
+import { forge, githubReleaseReader, secret } from "@niwa-labs/forge";
 
 host.use(forge({ servers: [{ host: "gitlab.example.com", token: secret("GITLAB_TOKEN") }] }));
 ```
@@ -13,6 +14,45 @@ host.use(forge({ servers: [{ host: "gitlab.example.com", token: secret("GITLAB_T
 The token is a secret reference. The host resolves it from
 `<home>/secrets/GITLAB_TOKEN` (mode 0600) or `NIWA_SECRET_GITLAB_TOKEN`, and the
 value never reaches the journal. `fetch` may be passed to speak to a fake server.
+
+## GitHub servers
+
+```ts
+import { forge, githubReleaseReader, secret } from "@niwa-labs/forge";
+
+const github = { host: "github.example.com", kind: "github" as const, token: secret("GITHUB_TOKEN") };
+host.use(forge({ servers: [github] }));
+const releases = githubReleaseReader(github, place);
+```
+
+`github.com` is asked at `https://api.github.com`, any other host is a GitHub
+Enterprise Server asked at `<url>/api/v3`. The token is a bearer token, read for
+each request. The client only reads: it keeps the ETag of every URL it read,
+follows the pages of a list by the `Link` the server gives, and goes by the
+server's own counts of the limit (`x-ratelimit-remaining` and `x-ratelimit-reset`,
+a `429` or a `403` marked with a `Retry-After` for its wait). A read the server
+could not answer is asked again a few times after a short wait; one the server
+refused is not asked again.
+
+`githubReleaseReader(server, place)` is the read-only port a release workflow
+speaks to, wherever the host's `place` (`home`, `now`, `fetch`, `env`) is at hand:
+
+- `ci({ slug, revision, branch }, { workflows, checks })` reports whether the
+  revision is on the branch, the checks the branch effectively requires (the
+  rules that apply to it, or the classic protection when no rule names any), the
+  current attempt of each required workflow at that exact revision with its jobs,
+  and each required check with the app that made it. A workflow that has not run
+  there, a check nothing has reported, one still queued or running, and two that
+  disagree, are answers of their own: `complete` is false, never silently green.
+- `release({ slug, revision, branch }, tag)` peels the tag — an annotated one
+  through its tag object — and reports the flags of the release that holds it and
+  the SHA-256 of the bytes of each asset, read from the server.
+
+A repository of a GitHub server is looked up by the module the same way a
+GitLab project is (`forge.repo.watch` looks it up first), and a pull request of
+GitHub is mapped onto the module's words of a pull request by
+`githubPullRequestOf` with `githubRunStateOf` and `githubChecksStateOf` for the
+states of its runs.
 
 - Targets: `<host>/<path>` for reads, `<host>/<path>/pr/<n>` for pull request
   writes and merges, `<host>/<path>/ref/<ref>` for pipelines and jobs. A run
