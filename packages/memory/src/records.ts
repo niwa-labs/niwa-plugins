@@ -10,6 +10,7 @@
 import { z } from "zod";
 
 import { Address, actionRef, record } from "@niwa-labs/core";
+import type { RecordGuard } from "@niwa-labs/core";
 import { RequestId } from "@niwa-labs/requests/records";
 import { AgentName, BriefingSectionInput, BriefingSectionOutput, SessionRefText, TurnAuthor } from "@niwa-labs/agent/records";
 
@@ -137,37 +138,54 @@ export const NoteDropped = record("memory.note.dropped", z.object({ memory: Memo
 export const PageName = z.string().regex(/^[a-z0-9][a-z0-9._/-]{0,127}$/, "a page is named with lowercase letters, digits, '.', '_', '-' or '/', at most 128");
 export type PageName = z.output<typeof PageName>;
 
-/** The largest text of a page, in bytes: what the journal still holds inline in a record. */
-export const PAGE_TEXT_MAX_BYTES = 16 * 1024;
+/** The caller's stable name for a placement of a note on one page. */
+export const PageItemId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/, "an item is named with letters, digits, '.', '_' or '-', at most 128");
+export type PageItemId = z.output<typeof PageItemId>;
 
-const PageText = z
-  .string()
-  .min(1)
-  .refine((text) => Buffer.byteLength(text, "utf8") <= PAGE_TEXT_MAX_BYTES, `a page holds at most ${String(PAGE_TEXT_MAX_BYTES)} bytes: split it`);
+const PageTitle = z.string().min(1).max(200);
+const PageRevision = z.number().int().nonnegative();
+const PageChangeResult = z.object({ page: PageName, revision: PageRevision.positive() });
+const PageChange = PageChangeResult.extend({ memory: MemoryName, basedOn: PageRevision, by: TurnAuthor });
 
-/**
- * A page was written: a longer text a memory keeps under a name, such as what a project is and how it
- * works. A page is written whole; each write is its next revision.
- */
+const PageItemPlacement = z.object({
+  item: PageItemId,
+  note: NoteId,
+  position: z.number().int().nonnegative(),
+  context: z.string().trim().min(1).max(NOTE_TEXT_MAX).optional(),
+});
+
+const pageRevisionGuard: RecordGuard<z.output<typeof PageChange> & { kind?: "put" | "remove" }, number> = {
+  // Old text pages were guarded under memory.page. Their revisions do not belong to pages of notes.
+  group: "memory.page.revision",
+  key: (data) => JSON.stringify([data.memory, data.page]),
+  initial: () => 0,
+  admit: (revision, data) => {
+    if (data.basedOn !== revision || data.revision !== revision + 1) {
+      return { code: "stale-page", reason: `the page ${data.page} is at revision ${revision}, not ${data.basedOn}: read it again` };
+    }
+    if (revision === 0 && data.kind !== undefined) {
+      return { code: "no-page", reason: `the memory of ${data.memory} has no page ${data.page}` };
+    }
+    return undefined;
+  },
+  fold: (_revision, data) => data.revision,
+};
+
+/** A page was created or its title and project were set. Its note placements stay in place. */
 export const PageWritten = record(
-  "memory.page.written",
-  z.object({
-    memory: MemoryName,
-    page: PageName,
-    title: z.string().min(1).max(200),
-    text: PageText,
-    project: Project.optional(),
-    basedOn: z.number().int().nonnegative(),
-    revision: z.number().int().positive(),
-    by: TurnAuthor,
-  }),
-  { guard: {
-    group: "memory.page", key: data => JSON.stringify([data.memory, data.page]),
-    initial: () => 0,
-    admit: (revision, data) => data.basedOn === revision && data.revision === revision + 1
-      ? undefined : { code: "stale-page", reason: `the page ${data.page} is at revision ${revision}, not ${data.basedOn}: read it again` },
-    fold: (_revision, data) => data.revision,
-  } },
+  "memory.page.metadata.written",
+  PageChange.extend({ title: PageTitle, project: Project.optional() }).strict(),
+  { guard: pageRevisionGuard },
+);
+
+/** A placement was set or removed. The page stores the note's id and resolves its text when read. */
+export const PageItemChanged = record(
+  "memory.page.item.changed",
+  z.discriminatedUnion("kind", [
+    PageChange.extend({ kind: z.literal("put"), ...PageItemPlacement.shape }).strict(),
+    PageChange.extend({ kind: z.literal("remove"), item: PageItemId }).strict(),
+  ]),
+  { guard: pageRevisionGuard },
 );
 
 /** The id of a turn of an agent's inbox, as the agents module names it. */
@@ -258,7 +276,7 @@ export const Consolidated = record(
 );
 
 /** The record types the module declares. */
-export const MEMORY_TYPES = [NoteWritten, NoteCorroborated, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered, ConsolidationStarted, Consolidated] as const;
+export const MEMORY_TYPES = [NoteWritten, NoteCorroborated, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, PageItemChanged, DigestTaken, ShareWanted, ShareAnswered, ConsolidationStarted, Consolidated] as const;
 
 /** Where a note stands. */
 export const NoteStatus = z.enum(["live", "retracted", "merged", "retired", "erased"]);
@@ -294,18 +312,23 @@ export const NoteView = z.object({
 });
 export type NoteView = z.output<typeof NoteView>;
 
-/** A page as the memory holds it. */
-export const PageView = z.object({
+/** A note on a page, resolved at the position of the read. */
+export const PageItemView = PageItemPlacement.extend({ text: NoteView.shape.text, source: NoteSource });
+export type PageItemView = z.output<typeof PageItemView>;
+
+/** The metadata and latest revision of a page. */
+export const PageSummary = PageChangeResult.extend({
   memory: MemoryName,
-  page: PageName,
-  title: z.string(),
-  text: z.string(),
+  title: PageTitle,
   project: Directory.optional(),
-  revision: z.number().int().positive(),
   by: TurnAuthor,
   /** The position of the journal where this revision was written. */
   seq: z.number().int().nonnegative(),
 });
+export type PageSummary = z.output<typeof PageSummary>;
+
+/** A page as the memory holds it, with its live notes in page order. */
+export const PageView = PageSummary.extend({ items: z.array(PageItemView) });
 export type PageView = z.output<typeof PageView>;
 
 /** One thing a search found: a note, a page or the digest of a session, with where it stands in the journal. */
@@ -384,32 +407,40 @@ export const memoryErase = actionRef("memory.erase", {
 
 export const memoryPageWrite = actionRef("memory.page.write", {
   description:
-    "Writes a page of a memory whole: a longer text under a name, such as what a project is and how it works. Give the revision it was read at to refuse a write over a change made since.",
+    "Creates a page or sets its title and project. Give the revision it was read at to refuse a write over a change made since.",
   input: z.object({
     ...Named,
     page: PageName,
-    title: z.string().min(1).max(200),
-    text: PageText,
+    title: PageTitle,
     project: Project.optional(),
     /** The revision the page was read at; 0 for a page that must be new. */
-    revision: z.number().int().nonnegative().optional(),
-  }),
-  output: z.object({ page: PageName, revision: z.number().int().positive() }),
+    revision: PageRevision.optional(),
+  }).strict(),
+  output: PageChangeResult,
+});
+
+export const memoryPageItemPut = actionRef("memory.page.item.put", {
+  description:
+    "Places a live note from this memory on a page. Reusing an item id sets its note, position and optional context. Items are ordered by position, then id. Give the page revision to refuse a write over a change made since.",
+  input: PageItemPlacement.extend({ ...Named, page: PageName, revision: PageRevision.optional() }).strict(),
+  output: PageChangeResult,
+});
+
+export const memoryPageItemRemove = actionRef("memory.page.item.remove", {
+  description: "Removes a note placement from a page by item id. Give the page revision to refuse a write over a change made since.",
+  input: z.object({ ...Named, page: PageName, item: PageItemId, revision: PageRevision.optional() }).strict(),
+  output: PageChangeResult,
 });
 
 export const memoryPageGet = actionRef("memory.page.get", {
-  description: "Gets a page of a memory, as it stands now or at a position of the journal (`at`).",
+  description: "Gets a page and its live notes, in order, as they stand now or at a position of the journal (`at`).",
   input: z.object({ ...Named, page: PageName, at: At.optional() }),
   output: PageView,
 });
 
-/** What a page list shows of each page: where it stands, not its text. */
-export const PageSummary = PageView.omit({ text: true });
-export type PageSummary = z.output<typeof PageSummary>;
-
 export const memoryPageList = actionRef("memory.page.list", {
   description:
-    "Lists the pages of a memory as they stand now, by name: the title, the project, the revision and who wrote it, without the text. With `project`, those of that project and the general ones.",
+    "Lists page metadata by name: the title, project, revision and author of the latest change. With `project`, lists pages of that project and general pages.",
   input: z.object({ ...Named, project: Project.optional() }),
   output: z.object({ memory: MemoryName, pages: z.array(PageSummary) }),
 });

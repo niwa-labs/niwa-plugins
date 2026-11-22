@@ -40,14 +40,55 @@ A note stops being shown first (`memory.drop`), is taken back
 once, so erasing hides the text from every read, including reads at an
 earlier position, while the record that first held it stays.
 
+## Pages
+
+A page has a name, title, optional project and an ordered list of items.
+Each item refers to a note in the same memory and can carry its own context,
+such as why the note belongs on the page. The note owns its text and source.
+
+- `memory.page.write` creates a page or replaces its metadata (`page`, `title`,
+  optional `project`). It preserves the items already on the page. Omit
+  `project` to make the page general.
+- `memory.page.item.put` adds or replaces `item` on `page` with a note ID,
+  a nonnegative integer `position` and optional `context` (up to 1,000
+  characters). The note must be live when placed. The item ID is local to
+  the page. Items with the same position sort by item ID. Omit `context`
+  when replacing an item to clear its previous context.
+- `memory.page.item.remove` takes `item` off `page`. The note remains in the
+  memory and in any other items that refer to it. An unknown item returns
+  `no-page-item`.
+
+The three actions accept optional `revision` for a write against that page
+revision and return the page name and resulting revision. Metadata and item
+changes share the same revision sequence. Use `revision: 0` to require a
+new page. A stale revision returns `stale-page`.
+
+`memory.page.get` returns the page metadata and `items`, with each item's ID,
+resolved note ID, position, optional context and the note's text and source.
+A correction updates the note on every page that refers to it. Consolidation
+resolves a merged reference to the surviving note. The read shows only items
+that resolve to live notes.
+
+At a journal position (`at`), the read uses the page, items and note revisions
+as of that position. An erase still hides the erased note from historical
+reads, including through a merge chain in effect at that position.
+
+**Upgrade from inline pages.** `memory.page.write` now takes metadata and
+rejects the former `text` field. `memory.page.get` returns `items` in place
+of the former `text` field. Earlier inline writes remain in the journal.
+To bring an earlier page back into page reads and search, create its metadata
+with `revision: 0` and attach notes as items.
+
 ## Reading
 
 - `memory.get`, `memory.list`, `memory.page.get` and `memory.search` read
   the memory now or at a journal position (`at`). `memory.page.list` lists the
-  pages by name, with the revision of each and without the text.
+  current page metadata by name, including the revision of each page.
 - `memory.search` ranks notes, pages and the latest digests by words with
-  BM25. A word matches whole or as the start of a longer word. No model or
-  external service is used.
+  BM25. Pages are indexed by title and the visible items' note text and
+  context. With a project filter, both the page and each note must hold for
+  that project. A word matches whole or as the start of a longer word. No
+  model or external service is used.
 - `memory.top` is the top layer for a project: lifted notes about the
   owner, for the project and in general, newest first, within 4000
   characters. The agent's briefing carries it as "What it remembers", and
@@ -104,5 +145,6 @@ are never retired. A digest arriving triggers consolidation once twenty
 records have changed the memory since the last one; `memory.consolidate`
 runs it on demand. All of these limits are set with `memory({ limits })`.
 
-`./cockpit` is the plugin's page: for each agent, the top layer by part, every note with its source and standing, the
-pages, and the share questions that wait for the owner.
+`./cockpit` shows each agent's top layer, notes with sources and standing,
+pages with their ordered notes and item context, and pending share questions.
+Open a page to add, update or remove its items against the revision shown.

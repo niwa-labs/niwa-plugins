@@ -1,13 +1,14 @@
 /** The memory of an agent: what is shown first, every note it holds, its pages, and the questions waiting for the owner. */
 
-import { EntityLink, PageLink, pathFor, useCall, type PageProps } from "@niwa-labs/cockpit-sdk";
+import { EntityLink, PageCommands, PageLink, pathFor, useCall, type PageProps } from "@niwa-labs/cockpit-sdk";
 import { CopyValue, DataValue, Markdown } from "@niwa-labs/ui-kit";
 
-import { MAX_NOTES, agentListAction, noteGetAction, noteListAction, openAction, pageGetAction, pageListAction, type Note, type PageSummary } from "./actions.ts";
+import { MAX_NOTES, agentListAction, noteGetAction, noteListAction, openAction, pageGetAction, pageListAction, type Note, type NoteSource, type PageItem, type PageSummary } from "./actions.ts";
 import { memoryChoice, newestFirst, shareQuestions, shownText, sourceText, standingText, topParts, type ShareQuestion } from "./notes.ts";
 
 const NOTES = { refreshOn: { types: ["memory.note.*", "memory.consolidated"] } };
-const PAGES = { refreshOn: { types: ["memory.page.written"] } };
+const PAGES = { refreshOn: { types: ["memory.page.*"] } };
+const PAGE_BODY = { refreshOn: { types: [...PAGES.refreshOn.types, ...NOTES.refreshOn.types] } };
 const SHARES = { refreshOn: { types: ["request.*", "memory.share.*"] } };
 
 function memoryPath(memory: string, page?: string): string {
@@ -18,7 +19,14 @@ function Failed({ what, message }: { what: string; message: string }) {
   return <p role="alert" className="text-sm text-destructive">Не удалось загрузить {what}. {message}</p>;
 }
 
-function NoteRow({ note }: { note: Note }) {
+function SourceValue({ source }: { source: NoteSource }) {
+  const label = sourceText(source);
+  if (source.kind === "session") return <CopyValue value={source.session} label={label} />;
+  if (source.kind === "record") return <CopyValue value={source.record} label={label} />;
+  return <span>{label}</span>;
+}
+
+function NoteRow({ note, showId = false }: { note: Note; showId?: boolean }) {
   return (
     <li data-slot="note-row" data-about={note.about} data-top={note.top} className="flex min-w-0 flex-col gap-1 py-2">
       <span className="text-sm">{note.text}</span>
@@ -27,10 +35,10 @@ function NoteRow({ note }: { note: Note }) {
         {note.project === undefined ? null : <DataValue value={note.project} />}
         <span>{standingText(note)}</span>
         <span>Источник</span>
-        {note.source.kind === "session" ? <CopyValue value={note.source.session} label={sourceText(note.source)} /> :
-          note.source.kind === "record" ? <CopyValue value={note.source.record} label={sourceText(note.source)} /> : <span>{sourceText(note.source)}</span>}
+        <SourceValue source={note.source} />
         {note.top ? <span>{note.pinned ? "Закреплено вручную" : "Показывается агенту первой"}</span> : null}
         {note.revision > 1 ? <span>версия {note.revision}</span> : null}
+        {showId ? <span className="ml-auto"><CopyValue value={note.note} label="ID заметки" name="Скопировать ID заметки" /></span> : null}
       </div>
     </li>
   );
@@ -55,14 +63,45 @@ function TopLayer({ notes }: { notes: readonly Note[] }) {
   );
 }
 
+function PageItemRow({ item }: { item: PageItem }) {
+  return (
+    <li data-slot="page-item" className="flex min-w-0 flex-col gap-2 py-3">
+      <Markdown text={item.text} className="break-words" />
+      {item.context === undefined ? null : (
+        <div className="flex min-w-0 flex-col gap-1 rounded bg-muted px-2 py-1.5 text-xs">
+          <span className="font-medium">Контекст на странице</span>
+          <span className="whitespace-pre-wrap break-words">{item.context}</span>
+        </div>
+      )}
+      <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <span>Источник</span>
+        <SourceValue source={item.source} />
+        <span className="ml-auto">Позиция {item.position}</span>
+        <CopyValue value={item.item} label={<span className="break-all">{item.item}</span>} name="Скопировать ID элемента страницы" />
+      </div>
+    </li>
+  );
+}
+
 function PageBody({ memory, page }: { memory: string; page: string }) {
-  const got = useCall(pageGetAction, { memory, page }, PAGES);
+  const got = useCall(pageGetAction, { memory, page }, PAGE_BODY);
   if (got.isPending) return <p className="text-sm text-muted-foreground">Загружаем страницу…</p>;
   if (got.isError) return <Failed what="страницу" message={got.error.message} />;
+  const preset = { memory, page, revision: got.data.revision };
   return (
     <article data-slot="memory-page" className="flex min-w-0 flex-col gap-2 rounded-lg border bg-card p-3 text-card-foreground">
       <h4 className="text-sm font-semibold">{got.data.title}</h4>
-      <Markdown text={got.data.text} />
+      <PageCommands key={got.data.revision} commands={[
+        { action: "memory.page.item.put", label: "Добавить или изменить элемент", preset },
+        { action: "memory.page.item.remove", label: "Убрать элемент со страницы", preset },
+      ]} />
+      {got.data.items.length === 0 ? (
+        <p className="text-sm text-muted-foreground">На этой странице пока нет заметок.</p>
+      ) : (
+        <ol className="divide-y">
+          {got.data.items.map((item) => <PageItemRow key={item.item} item={item} />)}
+        </ol>
+      )}
     </article>
   );
 }
@@ -86,7 +125,7 @@ function Pages({ memory, open }: { memory: string; open: string | undefined }) {
           </li>
         ))}
       </ul>
-      {open === undefined ? null : <PageBody memory={memory} page={open} />}
+      {open === undefined ? null : <PageBody key={open} memory={memory} page={open} />}
     </div>
   );
 }
@@ -149,7 +188,7 @@ function MemoryView({ memory, page }: { memory: string; page: string | undefined
         ) : (
           <ul data-slot="notes" className="divide-y rounded-lg border bg-card px-3 text-card-foreground">
             {newestFirst(notes.data.notes).map((note) => (
-              <NoteRow key={note.note} note={note} />
+              <NoteRow key={note.note} note={note} showId />
             ))}
           </ul>
         )}

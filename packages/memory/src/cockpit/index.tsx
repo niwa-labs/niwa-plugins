@@ -14,7 +14,7 @@ export default definePlugin({
       nav: { order: 65 },
       commands: [
         { action: "memory.note", label: "Добавить заметку" },
-        { action: "memory.page.write", label: "Записать страницу" },
+        { action: "memory.page.write", label: "Создать страницу или изменить её данные" },
         { action: "memory.search", label: "Найти запись" },
       ],
       component: MemoryPage,

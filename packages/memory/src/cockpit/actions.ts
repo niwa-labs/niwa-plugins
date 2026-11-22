@@ -68,10 +68,20 @@ export const pageListAction = {
   output: z.object({ memory: z.string(), pages: z.array(PageSummary) }),
 } as const;
 
+const PageItem = z.object({
+  item: z.string(),
+  note: z.string(),
+  position: z.number().int().nonnegative(),
+  context: z.string().optional(),
+  text: z.string(),
+  source: NoteSource,
+});
+export type PageItem = z.infer<typeof PageItem>;
+
 export const pageGetAction = {
   name: "memory.page.get",
   input: z.object({ memory: z.string(), page: z.string() }),
-  output: z.object({ page: z.string(), title: z.string(), text: z.string(), project: z.string().optional(), revision: z.number() }),
+  output: PageSummary.extend({ items: z.array(PageItem) }),
 } as const;
 
 const OpenRequest = z.object({

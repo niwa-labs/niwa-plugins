@@ -5,8 +5,8 @@ import { stableJson } from "@niwa-labs/core";
 import type { Address, StoredRecord } from "@niwa-labs/core";
 import type { TurnAuthor } from "@niwa-labs/agent/records";
 
-import { ConsolidationStarted, Consolidated, DigestTaken, NoteConfirmed, NoteCorroborated, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageWritten, ShareAnswered, ShareWanted } from "./records.ts";
-import type { MemoryName, NoteId, NoteSource, NoteView, PageName, PageView } from "./records.ts";
+import { ConsolidationStarted, Consolidated, DigestTaken, MEMORY_TYPES, NoteConfirmed, NoteCorroborated, NoteCorrected, NoteDropped, NoteErased, NoteLifted, NoteRetracted, NoteWritten, PageItemChanged, PageWritten, ShareAnswered, ShareWanted } from "./records.ts";
+import type { MemoryName, NoteId, NoteSource, NoteView, PageItemId, PageItemView, PageName, PageSummary, PageView } from "./records.ts";
 
 /** A record type with its schema: what the fold parses a stored record with. */
 interface Typed<T> {
@@ -61,10 +61,16 @@ function shareKey(memory: MemoryName, note: NoteId, revision: number, to: Addres
   return stableJson([memory, note, revision, to, purpose === undefined ? null : purposeText(purpose)]);
 }
 
-/** The notes of every memory, as far as the records folded so far say. */
+interface StoredPage {
+  summary: PageSummary;
+  readonly items: Map<PageItemId, Omit<PageItemView, "text" | "source">>;
+}
+
+/** The notes and pages of every memory, as far as the records folded so far say. */
 export class Memories {
   readonly #notes = new Map<MemoryName, Map<NoteId, NoteView>>();
-  readonly #pages = new Map<MemoryName, Map<PageName, PageView>>();
+  readonly #pages = new Map<MemoryName, Map<PageName, StoredPage>>();
+  readonly #mergedInto = new Map<MemoryName, Map<NoteId, NoteId>>();
   readonly #digests = new Map<MemoryName, TakenDigest[]>();
   readonly #shares = new Map<string, { state: ShareState; at: number }>();
   /** The sources each note counts, by memory and note. */
@@ -75,7 +81,7 @@ export class Memories {
   seq = 0;
 
   /** The record types a fold reads. */
-  static readonly TYPES: readonly string[] = [NoteWritten, NoteCorroborated, NoteConfirmed, NoteCorrected, NoteRetracted, NoteErased, NoteLifted, NoteDropped, PageWritten, DigestTaken, ShareWanted, ShareAnswered, Consolidated].map((type) => type.name);
+  static readonly TYPES: readonly string[] = MEMORY_TYPES.filter((type) => type !== ConsolidationStarted).map((type) => type.name);
 
   /** The notes of one memory, in the order they were written. */
   notesOf(memory: MemoryName): NoteView[] {
@@ -93,13 +99,53 @@ export class Memories {
     return this.#notes.get(memory)?.get(note);
   }
 
-  /** The pages of one memory, by name. */
+  /** The pages of one memory with their live notes. */
   pagesOf(memory: MemoryName): PageView[] {
-    return [...(this.#pages.get(memory)?.values() ?? [])];
+    return Array.from(this.#pages.get(memory)?.values() ?? [], (page) => this.#pageView(page));
   }
 
   page(memory: MemoryName, page: PageName): PageView | undefined {
-    return this.#pages.get(memory)?.get(page);
+    const stored = this.#pages.get(memory)?.get(page);
+    return stored === undefined ? undefined : this.#pageView(stored);
+  }
+
+  pageSummariesOf(memory: MemoryName): PageSummary[] {
+    return Array.from(this.#pages.get(memory)?.values() ?? [], ({ summary }) => summary);
+  }
+
+  pageSummary(memory: MemoryName, page: PageName): PageSummary | undefined {
+    return this.#pages.get(memory)?.get(page)?.summary;
+  }
+
+  /** A placement can still be edited or removed after its note stops holding. */
+  hasPageItem(memory: MemoryName, page: PageName, item: PageItemId): boolean {
+    return this.#pages.get(memory)?.get(page)?.items.has(item) ?? false;
+  }
+
+  #pageView({ summary, items }: StoredPage): PageView {
+    const visible: PageItemView[] = [];
+    for (const placement of items.values()) {
+      const note = this.#pageNote(summary.memory, placement.note);
+      if (note !== undefined) visible.push({ ...placement, note: note.note, text: note.text, source: note.source });
+    }
+    visible.sort((one, other) => one.position - other.position || (one.item < other.item ? -1 : one.item > other.item ? 1 : 0));
+    return { ...summary, items: visible };
+  }
+
+  /** A merge keeps placements readable through its survivor, up to the first note that no longer holds. */
+  #pageNote(memory: MemoryName, id: NoteId): NoteView | undefined {
+    let note = this.note(memory, id);
+    if (note?.status !== "merged") return note?.status === "live" ? note : undefined;
+
+    const merged = this.#mergedInto.get(memory);
+    const seen = new Set<NoteId>();
+    while (note?.status === "merged") {
+      const into = merged?.get(note.note);
+      if (into === undefined || seen.has(into)) return undefined;
+      seen.add(into);
+      note = this.note(memory, into);
+    }
+    return note?.status === "live" ? note : undefined;
   }
 
   /** The digests taken into one memory, oldest first. */
@@ -207,18 +253,36 @@ export class Memories {
     }
     const page = dataAs(stored, PageWritten);
     if (page !== undefined) {
-      const pages = this.#pages.get(page.memory) ?? new Map<PageName, PageView>();
+      const pages = this.#pages.get(page.memory) ?? new Map<PageName, StoredPage>();
       this.#pages.set(page.memory, pages);
       pages.set(page.page, {
-        memory: page.memory,
-        page: page.page,
-        title: page.title,
-        text: page.text,
-        ...(page.project === undefined ? {} : { project: page.project }),
-        revision: page.revision,
-        by: page.by,
-        seq: at,
+        summary: {
+          memory: page.memory,
+          page: page.page,
+          title: page.title,
+          ...(page.project === undefined ? {} : { project: page.project }),
+          revision: page.revision,
+          by: page.by,
+          seq: at,
+        },
+        items: pages.get(page.page)?.items ?? new Map(),
       });
+      return;
+    }
+    const item = dataAs(stored, PageItemChanged);
+    if (item !== undefined) {
+      const page = this.#pages.get(item.memory)?.get(item.page);
+      if (page === undefined) return;
+      if (item.kind === "remove") page.items.delete(item.item);
+      else {
+        page.items.set(item.item, {
+          item: item.item,
+          note: item.note,
+          position: item.position,
+          ...(item.context === undefined ? {} : { context: item.context }),
+        });
+      }
+      page.summary = { ...page.summary, revision: item.revision, by: item.by, seq: at };
       return;
     }
     const corroborated = dataAs(stored, NoteCorroborated);
@@ -295,6 +359,9 @@ export class Memories {
     const { memory } = done;
     this.#changes.set(memory, 0);
     for (const { note, into } of done.merged) {
+      const merged = this.#mergedInto.get(memory) ?? new Map<NoteId, NoteId>();
+      this.#mergedInto.set(memory, merged);
+      merged.set(note, into);
       const away = this.note(memory, note);
       const kept = this.#sources.get(`${memory} ${into}`);
       for (const key of this.#sources.get(`${memory} ${note}`) ?? []) kept?.add(key);

@@ -43,6 +43,7 @@ import {
   NoteLifted,
   NoteRetracted,
   NoteWritten,
+  PageItemChanged,
   PageWritten,
   ShareAnswered,
   ShareWanted,
@@ -58,6 +59,8 @@ import {
   memoryList,
   memoryNote,
   memoryPageGet,
+  memoryPageItemPut,
+  memoryPageItemRemove,
   memoryPageList,
   memoryPageWrite,
   memoryRetract,
@@ -110,7 +113,7 @@ export const DEFAULT_LIMITS: MemoryLimits = { top: 4_000, sessions: 200, consoli
 export class MemoryRefusal extends Error {
   override name = "MemoryRefusal";
   constructor(
-    readonly code: "not-yours" | "no-memory" | "not-owner" | "no-note" | "no-page" | "stale-page" | "erased" | "unbound" | "no-addressee",
+    readonly code: "not-yours" | "no-memory" | "not-owner" | "no-note" | "no-page" | "no-page-item" | "stale-page" | "erased" | "unbound" | "no-addressee",
     message: string,
   ) {
     super(message);
@@ -154,28 +157,42 @@ export function searchable(
   digests: readonly ReadDigest[],
   project: string | undefined,
 ): Array<{ text: string; value: SearchHit }> {
-  const ofNotes = notes
-    .filter((note) => holds(note) && holdsFor(note.project, project))
-    .map((note) => ({
-      order: note.written,
-      text: `${note.text}\n${note.detail ?? ""}`,
-      value: {
-        kind: "note" as const,
-        id: note.note,
-        text: note.text,
-        about: note.about,
-        ...(note.project === undefined ? {} : { project: note.project }),
-        score: 0,
-        seq: note.seq,
-      },
-    }));
+  const visible = notes.filter((note) => holds(note) && holdsFor(note.project, project));
+  const visibleIds = new Set(visible.map((note) => note.note));
+  const ofNotes = visible.map((note) => ({
+    order: note.written,
+    text: `${note.text}\n${note.detail ?? ""}`,
+    value: {
+      kind: "note" as const,
+      id: note.note,
+      text: note.text,
+      about: note.about,
+      ...(note.project === undefined ? {} : { project: note.project }),
+      score: 0,
+      seq: note.seq,
+    },
+  }));
   const ofPages = pages
     .filter((page) => holdsFor(page.project, project))
-    .map((page) => ({
-      order: page.seq,
-      text: `${page.title}\n${page.text}`,
-      value: { kind: "page" as const, id: page.page, title: page.title, text: opening(page.text), ...(page.project === undefined ? {} : { project: page.project }), score: 0, seq: page.seq },
-    }));
+    .map((page) => {
+      const body = page.items
+        .filter((item) => visibleIds.has(item.note))
+        .map((item) => item.context === undefined ? item.text : `${item.text}\n${item.context}`)
+        .join("\n");
+      return {
+        order: page.seq,
+        text: `${page.title}\n${body}`,
+        value: {
+          kind: "page" as const,
+          id: page.page,
+          title: page.title,
+          text: opening(body),
+          ...(page.project === undefined ? {} : { project: page.project }),
+          score: 0,
+          seq: page.seq,
+        },
+      };
+    });
   const ofDigests = digests
     .filter((digest) => holdsFor(digest.project, project))
     .map((digest) => ({
@@ -433,20 +450,73 @@ export function memory(options: MemoryOptions = {}): Plugin {
           const { memory, by } = reach(ctx, input.memory);
           const done = wrote(ctx, PageWritten);
           if (done !== undefined) return { page: done.data.page, revision: done.data.revision };
-          const basedOn = input.revision ?? now().page(memory, input.page)?.revision ?? 0;
+          const basedOn = input.revision ?? now().pageSummary(memory, input.page)?.revision ?? 0;
           const revision = basedOn + 1;
           await ctx.emit(PageWritten, {
             basedOn,
             memory,
             page: input.page,
             title: input.title,
-            text: input.text,
             ...(input.project === undefined ? {} : { project: input.project }),
             revision,
             by,
           });
           return { page: input.page, revision };
         },
+      }),
+    );
+
+    const changePageItem = async (
+      ctx: ActionContext,
+      input:
+        | ({ kind: "put" } & z.output<typeof memoryPageItemPut.input>)
+        | ({ kind: "remove" } & z.output<typeof memoryPageItemRemove.input>),
+    ) => {
+      const { memory, by } = reach(ctx, input.memory);
+      const done = wrote(ctx, PageItemChanged);
+      if (done?.data.kind === input.kind) return { page: done.data.page, revision: done.data.revision };
+
+      const { page, item } = input;
+      const memories = now();
+      const current = memories.pageSummary(memory, page);
+      if (current === undefined) throw new MemoryRefusal("no-page", `the memory of ${memory} has no page ${page}`);
+      const basedOn = input.revision ?? current.revision;
+      // A mismatched revision is refused by the journal before validating the placement against current contents.
+      if (basedOn === current.revision) {
+        if (input.kind === "put") {
+          const found = changeable(memory, input.note);
+          if (!holds(found)) throw new MemoryRefusal("no-note", `the note ${input.note} no longer holds`);
+        } else if (!memories.hasPageItem(memory, page, item)) {
+          throw new MemoryRefusal("no-page-item", `the page ${page} has no item ${item}`);
+        }
+      }
+      const revision = basedOn + 1;
+      const change = { memory, page, item, basedOn, revision, by };
+      await ctx.emit(PageItemChanged, input.kind === "put" ? {
+        ...change,
+        kind: "put",
+        note: input.note,
+        position: input.position,
+        ...(input.context === undefined ? {} : { context: input.context }),
+      } : { ...change, kind: "remove" });
+      return { page, revision };
+    };
+
+    api.action(
+      action(memoryPageItemPut, {
+        recovery: "repeat",
+        effect: "record",
+        world: "niwa",
+        run: (input, ctx) => changePageItem(ctx, { ...input, kind: "put" }),
+      }),
+    );
+
+    api.action(
+      action(memoryPageItemRemove, {
+        recovery: "repeat",
+        effect: "record",
+        world: "niwa",
+        run: (input, ctx) => changePageItem(ctx, { ...input, kind: "remove" }),
       }),
     );
 
@@ -472,9 +542,8 @@ export function memory(options: MemoryOptions = {}): Plugin {
         run: (input, ctx) => {
           const { memory } = reach(ctx, input.memory);
           const pages = now()
-            .pagesOf(memory)
+            .pageSummariesOf(memory)
             .filter((page) => holdsFor(page.project, input.project))
-            .map(({ text: _text, ...summary }) => summary)
             .sort((a, b) => a.page.localeCompare(b.page));
           return { memory, pages };
         },
